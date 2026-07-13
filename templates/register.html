@@ -1,0 +1,20 @@
+{% extends 'base.html' %}
+{% block title %}Register | BioForecast Arena{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <h1>Create Account</h1>
+  <form method="post" class="form-grid">
+    <label>First name
+      <input type="text" name="first_name" maxlength="40" required />
+    </label>
+    <label>Email
+      <input type="email" name="email" required />
+    </label>
+    <label>Password
+      <input type="password" name="password" minlength="8" required />
+    </label>
+    <button type="submit" class="btn-primary">Create Account</button>
+  </form>
+  <p class="small-line"><a href="{{ url_for('login') }}">Back to sign in</a></p>
+</section>
+{% endblock %}

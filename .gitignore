@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+app.db
+.venv/
+data/*.csv
+node_modules
+Secretome
+outputs/
+inputs/
+*.docx
+*.xlsx
+*.pdf
+*.db
+.env
+.DS_Store

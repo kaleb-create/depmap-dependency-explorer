@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block title %}Users | BioForecast Arena{% endblock %}
+{% block content %}
+<section class="panel-grid two-up">
+  <article class="panel">
+    <h1>Create User</h1>
+    <form method="post" class="form-grid">
+      <input type="hidden" name="action" value="create" />
+      <label>First name
+        <input type="text" name="first_name" maxlength="40" required />
+      </label>
+      <label>Email
+        <input type="email" name="email" required />
+      </label>
+      <label>Password
+        <input type="password" name="password" minlength="8" required />
+      </label>
+      <label>Role
+        <select name="role">
+          <option value="forecaster">Forecaster</option>
+          <option value="viewer">Viewer</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+      <button type="submit" class="btn-primary">Create User</button>
+    </form>
+  </article>
+
+  <article class="panel">
+    <h2>Current Users</h2>
+    <table class="table">
+      <thead>
+        <tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Action</th></tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+        <tr>
+          <td>{{ user.first_name }}</td>
+          <td>{{ user.email }}</td>
+          <td>{{ user.role }}</td>
+          <td>{{ 'Active' if user.is_active else 'Inactive' }}</td>
+          <td>
+            {% if user.id != current_user['id'] %}
+            <form method="post">
+              <input type="hidden" name="action" value="toggle_active" />
+              <input type="hidden" name="user_id" value="{{ user.id }}" />
+              <button type="submit" class="btn-link">{{ 'Deactivate' if user.is_active else 'Reactivate' }}</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">No users found.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+</section>
+{% endblock %}

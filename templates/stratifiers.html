@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Stratifiers{% endblock %}
+
+{% block content %}
+<section class="hero deps-hero">
+  <div>
+    <h1>Stratifiers</h1>
+    <p class="muted">Create and audit saved cell-line contrasts for the dependency explorer.</p>
+  </div>
+  <a class="btn-primary" href="{{ url_for('hpv_dependencies') }}">Open explorer</a>
+</section>
+
+<section class="panel stratifier-builder">
+  <div>
+    <h2>New Plain-English Stratifier</h2>
+    <p class="small-line">Describe two DepMap model cohorts, like “pancreatic adenocarcinoma vs colorectal adenocarcinoma”. Saved stratifiers are remembered in the explorer dropdown.</p>
+  </div>
+  <form method="post" action="{{ url_for('create_stratifier') }}" class="stratifier-form">
+    <label for="prompt">Cell-line difference</label>
+    <textarea
+      id="prompt"
+      name="prompt"
+      rows="3"
+      placeholder="KRAS mutant lung adenocarcinoma vs KRAS wild-type lung adenocarcinoma"
+      required
+    ></textarea>
+    <button class="btn-primary" type="submit">Create stratifier</button>
+  </form>
+</section>
+
+<section class="stratifier-list">
+  {% if stratifiers %}
+    {% for stratifier in stratifiers %}
+      <article class="stratifier-card">
+        <div class="stratifier-card-main">
+          <div>
+            <span class="chip chip-active">{{ stratifier.quality_status }}</span>
+            <h2>{{ stratifier.label }}</h2>
+            <p class="muted">{{ stratifier.prompt }}</p>
+          </div>
+          <form method="post" action="{{ url_for('delete_stratifier', stratifier_id=stratifier.id) }}">
+            <button class="btn-danger" type="submit">Delete</button>
+          </form>
+        </div>
+        <div class="stratifier-stats">
+          <div>
+            <strong>{{ stratifier.analysis.included_models.crispr.positive|length }}</strong>
+            <span>CRISPR positive</span>
+          </div>
+          <div>
+            <strong>{{ stratifier.analysis.included_models.crispr.negative_n }}</strong>
+            <span>CRISPR negative</span>
+          </div>
+          <div>
+            <strong>{{ stratifier.analysis.included_models.rnai.positive|length }}</strong>
+            <span>siRNA positive</span>
+          </div>
+          <div>
+            <strong>{{ stratifier.analysis.included_models.rnai.negative_n }}</strong>
+            <span>siRNA negative</span>
+          </div>
+        </div>
+        <details class="quality-details">
+          <summary>Quality analysis</summary>
+          <p>{{ stratifier.quality.summary }}</p>
+          <div class="quality-grid">
+            <div>
+              <strong>Strengths</strong>
+              <ul>
+                {% for item in stratifier.quality.strengths %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            <div>
+              <strong>Weaknesses</strong>
+              <ul>
+                {% for item in stratifier.quality.weaknesses %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            <div>
+              <strong>Recommended checks</strong>
+              <ul>
+                {% for item in stratifier.quality.recommended_checks %}
+                  <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+        </details>
+        <details class="quality-details">
+          <summary>Positive cohort</summary>
+          <ul class="model-list">
+            {% for model in stratifier.analysis.positive_models %}
+              <li>
+                <strong>{{ model.cell_line }}</strong>
+                <span class="muted">{{ model.model_id }} · {{ model.disease or "Unknown disease" }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      </article>
+    {% endfor %}
+  {% else %}
+    <article class="panel empty-state">
+      <h2>No saved stratifiers yet</h2>
+      <p class="muted">Create one from a plain-English cell-line contrast and it will appear in the explorer dropdown.</p>
+    </article>
+  {% endif %}
+</section>
+{% endblock %}

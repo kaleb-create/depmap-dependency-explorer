@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Differential Dependency Explorer{% endblock %}
+
+{% block content %}
+<section class="hero hpv-hero">
+  <div>
+    <h1>Differential Dependencies</h1>
+    <p class="muted">Positive-group average dependency minus negative-group average dependency for each DepMap gene.</p>
+  </div>
+  <div class="explorer-actions">
+    <a class="btn-primary btn-ghost" href="{{ url_for('manage_stratifiers') }}">Manage stratifiers</a>
+  </div>
+</section>
+
+<section class="panel explorer-controls">
+  <label for="analysis-select">Analysis
+    <select id="analysis-select"></select>
+  </label>
+  <label for="gene-search">Gene search
+    <input id="gene-search" type="search" placeholder="Search TP53, E6AP, MYC..." autocomplete="off" />
+  </label>
+</section>
+
+<section class="hpv-meta panel" id="hpv-meta">
+  <div>
+    <span class="small-line">Loading DepMap summary...</span>
+  </div>
+</section>
+
+<section class="dependency-grid">
+  <article class="dependency-panel">
+    <div class="dependency-head">
+      <div>
+        <h2>CRISPR</h2>
+        <p class="small-line" id="crispr-subtitle">Loading...</p>
+      </div>
+      <output id="crispr-count" class="chart-count"></output>
+    </div>
+    <canvas id="crispr-chart" width="980" height="420"></canvas>
+  </article>
+
+  <article class="dependency-panel">
+    <div class="dependency-head">
+      <div>
+        <h2>siRNA</h2>
+        <p class="small-line" id="rnai-subtitle">Loading...</p>
+      </div>
+      <output id="rnai-count" class="chart-count"></output>
+    </div>
+    <canvas id="rnai-chart" width="980" height="420"></canvas>
+  </article>
+</section>
+
+<section class="panel hpv-table-panel">
+  <div class="dependency-head">
+    <div>
+      <h2>Matched Genes</h2>
+      <p class="small-line">Search results show differential scores and the underlying group averages.</p>
+    </div>
+  </div>
+  <div class="table-scroll">
+    <table class="table" id="gene-results">
+      <thead>
+        <tr>
+          <th>Gene</th>
+          <th>CRISPR diff</th>
+          <th>CRISPR group avgs</th>
+          <th>siRNA diff</th>
+          <th>siRNA group avgs</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</section>
+
+<div class="chart-tooltip hidden" id="chart-tooltip"></div>
+<script src="{{ url_for('static', filename='hpv_dependencies.js') }}"></script>
+{% endblock %}

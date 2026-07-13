@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard | BioForecast Arena{% endblock %}
+{% block content %}
+<section class="hero">
+  <div>
+    <h1>Team Forecast Command Center</h1>
+    <p>Track approvals, submit forecasts, and compete on calibrated accuracy.</p>
+  </div>
+  <a href="{{ url_for('create_bet') }}" class="btn-primary">Propose Bet</a>
+</section>
+
+<section class="panel-grid two-up">
+  <article class="panel">
+    <h2>Top Forecasters</h2>
+    <table class="table">
+      <thead>
+        <tr><th>Rank</th><th>Name</th><th>Avg score</th><th>Resolved</th></tr>
+      </thead>
+      <tbody>
+        {% for row in leaderboard[:8] %}
+        <tr>
+          <td>#{{ row.rank }}</td>
+          <td>{{ row.first_name }}</td>
+          <td>{{ '%.2f'|format(row.avg_score) }}</td>
+          <td>{{ row.resolved_count }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">No resolved forecasts yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+
+  <article class="panel">
+    <h2>Proposed Bets</h2>
+    <div class="card-list">
+      {% for bet in proposed %}
+      <a class="bet-card" href="{{ url_for('bet_detail', bet_id=bet.id) }}">
+        <div class="bet-card-top">
+          <span class="chip chip-proposed">Proposed</span>
+          <span>{{ bet.market_type|replace('_', ' ')|title }}</span>
+        </div>
+        <h3>{{ bet.title }}</h3>
+        <p>Creator: {{ bet.creator_name }} | Approvals: {{ bet.approval_count }}</p>
+        <p>Approval deadline: {{ bet.approval_deadline|dt }}</p>
+      </a>
+      {% else %}
+      <p>No pending proposals.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+
+<section class="panel-grid two-up">
+  <article class="panel">
+    <h2>Active Bets</h2>
+    <div class="card-list">
+      {% for bet in active %}
+      <a class="bet-card" href="{{ url_for('bet_detail', bet_id=bet.id) }}">
+        <div class="bet-card-top">
+          <span class="chip chip-active">Active</span>
+          <span>{{ bet.market_type|replace('_', ' ')|title }}</span>
+        </div>
+        <h3>{{ bet.title }}</h3>
+        <p>Created by {{ bet.creator_name }}</p>
+        <p>Closes: {{ bet.close_at|dt }}</p>
+      </a>
+      {% else %}
+      <p>No active bets right now.</p>
+      {% endfor %}
+    </div>
+  </article>
+
+  <article class="panel">
+    <h2>Recently Resolved</h2>
+    <div class="card-list">
+      {% for bet in resolved %}
+      <a class="bet-card" href="{{ url_for('bet_detail', bet_id=bet.id) }}">
+        <div class="bet-card-top">
+          <span class="chip chip-resolved">Resolved</span>
+          <span>{{ bet.market_type|replace('_', ' ')|title }}</span>
+        </div>
+        <h3>{{ bet.title }}</h3>
+        <p>Resolve target: {{ bet.resolve_at|dt }}</p>
+      </a>
+      {% else %}
+      <p>No resolved bets yet.</p>
+      {% endfor %}
+    </div>
+  </article>
+</section>
+{% endblock %}

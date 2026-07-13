@@ -1,0 +1,175 @@
+{
+  "alphafold": {
+    "uniprotAccession": "P07949",
+    "entryId": "AF-P07949-F1",
+    "modelVersion": 6,
+    "modelCreatedDate": "2025-08-01",
+    "sequenceLength": 1114,
+    "meanPLDDT": 78.81,
+    "fractionVeryHigh": 0.509,
+    "fractionConfident": 0.264,
+    "fractionLow": 0.039,
+    "fractionVeryLow": 0.188,
+    "pdbPath": "/static/data/ret/AF-P07949-F1-model_v6.pdb",
+    "paeJsonPath": "/static/data/ret/AF-P07949-F1-pae_v6.json",
+    "paeImagePath": "/static/img/ret_pae_v6.png",
+    "sourceHref": "https://alphafold.ebi.ac.uk/entry/P07949",
+    "summary": "AlphaFold DB model for full-length human RET with high confidence across much of the kinase domain and lower confidence in flexible loops and long disordered segments."
+  },
+  "pockets": [
+    {
+      "slug": "fp2",
+      "name": "FP-II / post-lysine",
+      "score": 76.7,
+      "residues": [758, 760, 768, 772],
+      "description": "Cryptic front-pocket-II cavity adjacent to K758 that selective RET inhibitors exploit while leaving room for a ternary-interface-facing appendage.",
+      "ligandEngagement": ["selpercatinib", "pralsetinib", "enbezotinib"],
+      "rank": 1,
+      "color": "#d9485f"
+    },
+    {
+      "slug": "gatekeeper",
+      "name": "Gatekeeper / back",
+      "score": 55.9,
+      "residues": [804, 805, 806, 807, 808, 809, 810, 811, 881, 891, 892],
+      "description": "Classic kinase back pocket behind V804. It is ligandable, but the solvent-facing geometry is narrower and less favorable for glue-like interface shaping than FP-II.",
+      "ligandEngagement": ["vandetanib", "nintedanib", "ponatinib", "selpercatinib", "pralsetinib"],
+      "rank": 2,
+      "color": "#1f78b4"
+    },
+    {
+      "slug": "cp",
+      "name": "CP / HRD motif",
+      "score": 52.4,
+      "residues": [874, 878, 879, 881, 912, 914],
+      "description": "A smaller dynamic cavity near the HRD motif. Interesting for cooperativity, but the void is less persistent and more conformationally fragile in our dynamics pass.",
+      "ligandEngagement": ["enbezotinib"],
+      "rank": 3,
+      "color": "#33a02c"
+    }
+  ],
+  "ligands": [
+    {
+      "slug": "selpercatinib",
+      "name": "Selpercatinib",
+      "aliases": ["LOXO-292", "Retevmo"],
+      "cid": 134436906,
+      "formula": "C29H31N7O3",
+      "molecularWeight": 525.6,
+      "xlogp": 2.5,
+      "tpsa": 112.0,
+      "selectivity": "RET-selective",
+      "evidencePdb": ["7JU6"],
+      "primaryPockets": ["fp2", "gatekeeper"],
+      "imagePath": "/static/img/ligands/selpercatinib.png",
+      "sourceHref": "https://pubchem.ncbi.nlm.nih.gov/compound/134436906",
+      "notes": "High-resolution RET co-crystal; archetypal front/back cleft binder that avoids the classic gatekeeper bottleneck."
+    },
+    {
+      "slug": "pralsetinib",
+      "name": "Pralsetinib",
+      "aliases": ["BLU-667", "Gavreto"],
+      "cid": 129073603,
+      "formula": "C27H32FN9O2",
+      "molecularWeight": 533.6,
+      "xlogp": 3.1,
+      "tpsa": 136.0,
+      "selectivity": "RET-selective",
+      "evidencePdb": ["7JU5"],
+      "primaryPockets": ["fp2", "gatekeeper"],
+      "imagePath": "/static/img/ligands/pralsetinib.png",
+      "sourceHref": "https://pubchem.ncbi.nlm.nih.gov/compound/129073603",
+      "notes": "RET-selective clinical inhibitor with a closely related front/back-cleft engagement profile."
+    },
+    {
+      "slug": "vandetanib",
+      "name": "Vandetanib",
+      "aliases": ["ZD6474", "Caprelsa"],
+      "cid": 3081361,
+      "formula": "C22H24BrFN4O2",
+      "molecularWeight": 475.4,
+      "xlogp": 4.9,
+      "tpsa": 59.5,
+      "selectivity": "Multikinase",
+      "evidencePdb": ["2IVU"],
+      "primaryPockets": ["gatekeeper"],
+      "imagePath": "/static/img/ligands/vandetanib.png",
+      "sourceHref": "https://pubchem.ncbi.nlm.nih.gov/compound/3081361",
+      "notes": "Type-I inhibitor that relies more heavily on the classical ATP/back-pocket architecture."
+    },
+    {
+      "slug": "nintedanib",
+      "name": "Nintedanib",
+      "aliases": ["Ofev"],
+      "cid": 135423438,
+      "formula": "C31H33N5O4",
+      "molecularWeight": 539.6,
+      "xlogp": 4.3,
+      "tpsa": 101.0,
+      "selectivity": "Multikinase",
+      "evidencePdb": ["6NEC"],
+      "primaryPockets": ["gatekeeper"],
+      "imagePath": "/static/img/ligands/nintedanib.png",
+      "sourceHref": "https://pubchem.ncbi.nlm.nih.gov/compound/135423438",
+      "notes": "Co-crystallized with RET and useful as a comparison point for the narrower back-pocket chemotype."
+    },
+    {
+      "slug": "ponatinib",
+      "name": "Ponatinib",
+      "aliases": ["Iclusig"],
+      "cid": 24826799,
+      "formula": "C29H27F3N6O",
+      "molecularWeight": 532.6,
+      "xlogp": 4.1,
+      "tpsa": 65.8,
+      "selectivity": "Multikinase",
+      "evidencePdb": [],
+      "primaryPockets": ["gatekeeper"],
+      "imagePath": "/static/img/ligands/ponatinib.png",
+      "sourceHref": "https://pubchem.ncbi.nlm.nih.gov/compound/24826799",
+      "notes": "No RET co-crystal here, but included because it is a known RET-active comparator with a back-pocket-biased scaffold."
+    },
+    {
+      "slug": "enbezotinib",
+      "name": "Enbezotinib",
+      "aliases": ["TPX-0046"],
+      "cid": 146662764,
+      "formula": "C21H21FN6O3",
+      "molecularWeight": 424.4,
+      "xlogp": 1.8,
+      "tpsa": 93.9,
+      "selectivity": "RET/SRC macrocycle",
+      "evidencePdb": ["7NZN"],
+      "primaryPockets": ["fp2", "cp"],
+      "imagePath": "/static/img/ligands/enbezotinib.png",
+      "sourceHref": "https://pubchem.ncbi.nlm.nih.gov/compound/146662764",
+      "notes": "Macrocyclic RET/SRC inhibitor with chemistry that better demonstrates how a glue-like appendage might be tolerated near the front pocket."
+    }
+  ],
+  "sources": [
+    {
+      "label": "AlphaFold DB RET entry",
+      "href": "https://alphafold.ebi.ac.uk/entry/P07949"
+    },
+    {
+      "label": "RCSB 7JU6 (RET + selpercatinib)",
+      "href": "https://www.rcsb.org/structure/7JU6"
+    },
+    {
+      "label": "RCSB 7JU5 (RET + pralsetinib)",
+      "href": "https://www.rcsb.org/structure/7JU5"
+    },
+    {
+      "label": "RCSB 2IVU (RET + vandetanib)",
+      "href": "https://www.rcsb.org/structure/2IVU"
+    },
+    {
+      "label": "RCSB 6NEC (RET + nintedanib)",
+      "href": "https://www.rcsb.org/structure/6NEC"
+    },
+    {
+      "label": "RCSB 7NZN (RET + enbezotinib/TPX-0046 analogue)",
+      "href": "https://www.rcsb.org/structure/7NZN"
+    }
+  ]
+}

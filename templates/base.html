@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}BioForecast Arena{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    {% block head_extra %}{% endblock %}
+  </head>
+  <body>
+    <div class="bg-shape bg-shape-a"></div>
+    <div class="bg-shape bg-shape-b"></div>
+    <header class="topbar">
+      <a class="brand" href="{{ url_for('dashboard') }}">BioForecast Arena</a>
+      {% if current_user %}
+      <nav>
+        <a href="{{ url_for('dashboard') }}">Dashboard</a>
+        <a href="{{ url_for('ret_allostery') }}">RET Allostery</a>
+        <a href="{{ url_for('ddx3_selectivity') }}">DDX3 Selectivity</a>
+        <a href="{{ url_for('leaderboard') }}">Leaderboard</a>
+        <a href="{{ url_for('scoring_explainer') }}">Scoring</a>
+        <a href="{{ url_for('hpv_dependencies') }}">Dependencies</a>
+        <a href="{{ url_for('manage_stratifiers') }}">Stratifiers</a>
+        {% if current_user['role'] in ['forecaster', 'admin'] %}
+        <a href="{{ url_for('create_bet') }}">New Bet</a>
+        {% endif %}
+        {% if current_user['role'] == 'admin' %}
+        <a href="{{ url_for('admin_users') }}">Users</a>
+        {% endif %}
+      </nav>
+      <div class="identity">
+        <span>{{ current_user['first_name'] }} ({{ current_user['role'] }})</span>
+        <form method="post" action="{{ url_for('logout') }}">
+          <button type="submit" class="btn-link">Logout</button>
+        </form>
+      </div>
+      {% endif %}
+    </header>
+
+    <main class="container">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <section class="flash-wrap">
+            {% for category, message in messages %}
+              <div class="flash flash-{{ category }}">{{ message }}</div>
+            {% endfor %}
+          </section>
+        {% endif %}
+      {% endwith %}
+
+      {% block content %}{% endblock %}
+    </main>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

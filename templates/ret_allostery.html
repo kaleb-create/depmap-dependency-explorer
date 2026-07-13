@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %}RET Allostery | BioForecast Arena{% endblock %}
+{% block head_extra %}
+<script src="https://3Dmol.org/build/3Dmol-min.js"></script>
+{% endblock %}
+{% block content %}
+<section class="ret-hero">
+  <div>
+    <p class="eyebrow">AlphaFold + Structure-Guided Pocket Mapping</p>
+    <h1>RET Allosteric Pocket Atlas</h1>
+    <p class="ret-subtitle">
+      Interactive view of the full-length AlphaFold RET model, our pocket-feasibility ranking, and known
+      ligands mapped onto the ranked cavities.
+    </p>
+  </div>
+  <div class="ret-kpis">
+    <div class="ret-kpi">
+      <span class="ret-kpi-value" id="retMeanPlddt">78.8</span>
+      <span class="ret-kpi-label">Mean pLDDT</span>
+    </div>
+    <div class="ret-kpi">
+      <span class="ret-kpi-value">3</span>
+      <span class="ret-kpi-label">Ranked pockets</span>
+    </div>
+    <div class="ret-kpi">
+      <span class="ret-kpi-value">6</span>
+      <span class="ret-kpi-label">Ligands tracked</span>
+    </div>
+  </div>
+</section>
+
+<section class="ret-layout">
+  <article class="panel ret-viewer-panel">
+    <div class="ret-panel-head">
+      <div>
+        <h2>3D Structure</h2>
+        <p>AlphaFold RET model colored by confidence, with pocket hotspots overlaid on the kinase domain.</p>
+      </div>
+      <div class="ret-controls">
+        <button class="btn-primary" type="button" data-style="confidence">pLDDT</button>
+        <button class="btn-primary btn-ghost" type="button" data-style="cartoon">Cartoon</button>
+        <button class="btn-primary btn-ghost" type="button" data-style="surface">Surface</button>
+      </div>
+    </div>
+    <div id="retViewer" class="ret-viewer"></div>
+    <div class="ret-pocket-switches" id="retPocketSwitches"></div>
+  </article>
+
+  <aside class="panel ret-side-panel">
+    <h2>Confidence and PAE</h2>
+    <p id="retAfSummary"></p>
+    <img
+      class="ret-pae"
+      src="{{ url_for('static', filename='img/ret_pae_v6.png') }}"
+      alt="AlphaFold predicted aligned error for RET"
+    />
+    <div class="ret-source-row">
+      <a class="text-link" href="#" id="retAfLink" target="_blank" rel="noreferrer">AlphaFold entry</a>
+    </div>
+  </aside>
+</section>
+
+<section class="panel ret-pocket-panel">
+  <div class="ret-panel-head">
+    <div>
+      <h2>Pocket Ranking</h2>
+      <p>Feasibility score combines persistence, exposure, ATP orthogonality, and interface-shaping headroom.</p>
+    </div>
+  </div>
+  <div id="retPocketRanks" class="ret-pocket-ranks"></div>
+</section>
+
+<section class="panel">
+  <div class="ret-panel-head">
+    <div>
+      <h2>Known Ligands</h2>
+      <p>RET ligands with structure-backed complexes where available and pocket-level engagement annotations.</p>
+    </div>
+  </div>
+  <div id="retLigandGrid" class="ret-ligand-grid"></div>
+</section>
+
+<section class="panel">
+  <h2>Source Trail</h2>
+  <div id="retSourceList" class="ret-source-list"></div>
+</section>
+{% endblock %}
+{% block scripts %}
+<script src="{{ url_for('static', filename='ret_allostery.js') }}"></script>
+{% endblock %}

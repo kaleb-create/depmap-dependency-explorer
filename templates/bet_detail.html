@@ -1,0 +1,221 @@
+{% extends 'base.html' %}
+{% block title %}Bet #{{ bet.id }} | BioForecast Arena{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="bet-head">
+    <div>
+      <h1>{{ bet.title }}</h1>
+      <p class="muted">{{ bet.description or 'No description provided.' }}</p>
+      <p class="meta-line">
+        <span class="chip chip-{{ bet.status }}">{{ bet.status|title }}</span>
+        <span>Type: {{ bet.market_type|replace('_', ' ')|title }}</span>
+        <span>Creator: {{ bet.creator_name }}</span>
+        <span>Category: {{ bet.category or 'General' }}</span>
+      </p>
+      <p class="meta-line">
+        <span>Closes: {{ bet.close_at|dt }}</span>
+        <span>Resolve target: {{ bet.resolve_at|dt }}</span>
+        <span>Approval deadline: {{ bet.approval_deadline|dt }}</span>
+      </p>
+    </div>
+    {% if current_user['role'] == 'admin' and bet.status not in ['discarded', 'resolved'] %}
+    <form method="post" action="{{ url_for('discard_bet', bet_id=bet.id) }}" class="inline-form">
+      <input type="text" name="reason" maxlength="120" placeholder="Discard reason (optional)" />
+      <button type="submit" class="btn-danger">Discard</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <section class="subpanel">
+    <h2>Approval</h2>
+    <p>Requires exactly one non-creator approval to activate.</p>
+    <ul class="inline-list">
+      {% for approval in approvals %}
+      <li>{{ approval.first_name }} ({{ approval.approved_at|dt }})</li>
+      {% else %}
+      <li>No approvals yet.</li>
+      {% endfor %}
+    </ul>
+    {% if can_approve %}
+    <form method="post" action="{{ url_for('approve_bet', bet_id=bet.id) }}">
+      <button type="submit" class="btn-primary">Approve Bet</button>
+    </form>
+    {% endif %}
+  </section>
+</section>
+
+<section class="panel-grid two-up">
+  <article class="panel">
+    <h2>Your Forecast</h2>
+    {% if current_user['role'] == 'viewer' %}
+      <p>Viewer accounts cannot submit forecasts.</p>
+    {% elif can_submit_forecast or can_edit %}
+      <form method="post" action="{{ url_for('submit_forecast', bet_id=bet.id) }}" class="form-grid">
+        {% if bet.market_type == 'binary' %}
+        <label>Direction
+          <select name="choice" required>
+            <option value="yes" {% if own_forecast and own_forecast.choice == 'yes' %}selected{% endif %}>Yes</option>
+            <option value="no" {% if own_forecast and own_forecast.choice == 'no' %}selected{% endif %}>No</option>
+          </select>
+        </label>
+        {% elif bet.market_type == 'numeric' %}
+        <label>Point estimate
+          <input type="number" step="any" name="point_estimate" value="{{ own_forecast.point_estimate if own_forecast else '' }}" required />
+        </label>
+        {% else %}
+        <label>Pick one
+          <select name="choice" required>
+            {% for option in options %}
+            <option value="{{ option }}" {% if own_forecast and own_forecast.choice == option %}selected{% endif %}>{{ option }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        {% endif %}
+
+        <label>Confidence (<span id="confValue">{{ ((own_forecast.confidence if own_forecast else 0.70) * 100)|round|int }}</span>%)
+          <input id="confidence" type="range" name="confidence" min="50" max="100" step="1" value="{{ ((own_forecast.confidence if own_forecast else 0.70) * 100)|round|int }}" />
+        </label>
+
+        <button type="submit" class="btn-primary">{% if own_forecast %}Update Forecast{% else %}Submit Forecast{% endif %}</button>
+      </form>
+      {% if own_forecast %}
+      <p class="small-line">Editable until: {{ own_forecast.locked_at|dt }}</p>
+      {% endif %}
+    {% else %}
+      {% if own_forecast %}
+      <p>Your forecast is locked. 10-minute edit window has passed or market is closed.</p>
+      {% else %}
+      <p>Forecasting is not open for this bet right now.</p>
+      {% endif %}
+    {% endif %}
+  </article>
+
+  <article class="panel">
+    <h2>Forecast Feed</h2>
+    {% if can_view_forecast_list %}
+      <table class="table">
+        <thead>
+          <tr><th>Forecaster</th><th>Forecast</th><th>Confidence</th><th>Updated</th></tr>
+        </thead>
+        <tbody>
+          {% for forecast in forecasts %}
+          <tr>
+            <td>{{ forecast.first_name }}</td>
+            <td>
+              {% if bet.market_type == 'binary' %}
+                {{ forecast.choice|upper }}
+              {% elif bet.market_type == 'numeric' %}
+                {{ forecast.point_estimate }}
+              {% else %}
+                {{ forecast.choice }}
+              {% endif %}
+            </td>
+            <td>{{ (forecast.confidence * 100)|round|int }}%</td>
+            <td>{{ forecast.updated_at|dt }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="4">No forecasts yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>Submit your forecast first to unlock other forecasters' predictions.</p>
+    {% endif %}
+  </article>
+</section>
+
+<section class="panel-grid two-up">
+  <article class="panel">
+    <h2>Resolutions</h2>
+    <table class="table">
+      <thead>
+        <tr><th>Label</th><th>Outcome</th><th>Weight</th><th>Resolver</th><th>When</th></tr>
+      </thead>
+      <tbody>
+        {% for res in resolutions %}
+        <tr>
+          <td>{{ res.label }}{% if res.is_void %} (Void){% endif %}</td>
+          <td>
+            {% if bet.market_type == 'binary' %}
+              {% if res.outcome_binary == 1 %}Yes{% else %}No{% endif %}
+            {% elif bet.market_type == 'numeric' %}
+              {{ res.outcome_numeric }}
+            {% else %}
+              {{ res.outcome_option }}
+            {% endif %}
+          </td>
+          <td>{{ res.weight }}</td>
+          <td>{{ res.resolver_name }}</td>
+          <td>{{ res.resolved_at|dt }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5">No resolution entries yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+
+  {% if current_user['role'] == 'admin' %}
+  <article class="panel">
+    <h2>Add Resolution (Admin)</h2>
+    <form method="post" action="{{ url_for('resolve_bet', bet_id=bet.id) }}" class="form-grid">
+      <label>Label
+        <input type="text" name="label" placeholder="Primary, FDA decision, etc." />
+      </label>
+
+      {% if bet.market_type == 'binary' %}
+      <label>Outcome
+        <select name="outcome_binary" required>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+      </label>
+      {% elif bet.market_type == 'numeric' %}
+      <label>Outcome value
+        <input type="number" step="any" name="outcome_numeric" required />
+      </label>
+      {% else %}
+      <label>Winning option
+        <select name="outcome_option" required>
+          {% for option in options %}
+          <option value="{{ option }}">{{ option }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
+
+      <label>Weight
+        <input type="number" step="0.1" min="0.1" name="weight" value="1.0" />
+      </label>
+
+      <label>Source URL
+        <input type="url" name="source_url" placeholder="https://..." />
+      </label>
+
+      <label>Notes
+        <textarea name="notes" rows="3"></textarea>
+      </label>
+
+      <label>Mark as void
+        <select name="is_void">
+          <option value="0">No</option>
+          <option value="1">Yes</option>
+        </select>
+      </label>
+
+      <button type="submit" class="btn-primary">Save Resolution</button>
+    </form>
+  </article>
+  {% endif %}
+</section>
+
+<script>
+const conf = document.getElementById('confidence');
+const confValue = document.getElementById('confValue');
+if (conf && confValue) {
+  conf.addEventListener('input', () => {
+    confValue.textContent = conf.value;
+  });
+}
+</script>
+{% endblock %}

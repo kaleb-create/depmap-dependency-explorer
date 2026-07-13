@@ -1,0 +1,19 @@
+{% extends 'base.html' %}
+{% block title %}Sign In | BioForecast Arena{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <h1>Sign In</h1>
+  <form method="post" class="form-grid">
+    <label>Email
+      <input type="email" name="email" required />
+    </label>
+    <label>Password
+      <input type="password" name="password" required />
+    </label>
+    <button type="submit" class="btn-primary">Sign In</button>
+  </form>
+  {% if config.ALLOW_SELF_SIGNUP %}
+  <p class="small-line">No account? <a href="{{ url_for('register') }}">Register</a></p>
+  {% endif %}
+</section>
+{% endblock %}
