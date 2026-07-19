@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import os
 import ssl
 import urllib.parse
@@ -19,6 +20,8 @@ CELLOSAURUS_SEARCH_URL = "https://api.cellosaurus.org/search/cell-line"
 CRISPR_RELEASE = "DepMap Public 26Q1"
 RNAI_RELEASE = "DEMETER2 Data v6"
 HPV_TRANSFORMANT_QUERY = "transformant:papillomavirus"
+MIN_GROUP_VALUES = 3
+MIN_GROUP_COVERAGE = 0.5
 
 MUTATION_ANALYSES = [
     ("kras", "KRAS mutant vs non-mutant", ["KRAS"]),
@@ -225,10 +228,12 @@ def row_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tuple[
     datasets: dict[str, list[dict[str, object]]] = {}
     for key in analyses:
         rows = []
+        min_positive_n = min_values_for_group(len(positive_rows[key]))
+        min_negative_n = min_values_for_group(negative_counts_by_analysis[key])
         for i, label in enumerate(labels):
             pos_n = counts[key][i]
             neg_n = neg_counts[key][i]
-            if pos_n == 0 or neg_n == 0:
+            if pos_n < min_positive_n or neg_n < min_negative_n:
                 continue
             positive_average = sums[key][i] / pos_n
             negative_average = neg_sums[key][i] / neg_n
@@ -252,6 +257,8 @@ def row_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tuple[
         key: {
             "positive": sorted(positive_rows[key]),
             "negative_n": negative_counts_by_analysis[key],
+            "min_positive_n": min_values_for_group(len(positive_rows[key])),
+            "min_negative_n": min_values_for_group(negative_counts_by_analysis[key]),
         }
         for key in analyses
     }
@@ -266,6 +273,7 @@ def column_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tup
         reader = csv.reader(f)
         header = next(reader)
         indexes: dict[str, tuple[list[int], list[int], list[str]]] = {}
+        minimums: dict[str, tuple[int, int]] = {}
         for key, positives in analyses.items():
             pos_indexes = []
             neg_indexes = []
@@ -277,14 +285,21 @@ def column_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tup
                 else:
                     neg_indexes.append(i)
             indexes[key] = (pos_indexes, neg_indexes, pos_columns)
-            included[key] = {"positive": sorted(pos_columns), "negative_n": len(neg_indexes)}
+            minimums[key] = (min_values_for_group(len(pos_indexes)), min_values_for_group(len(neg_indexes)))
+            included[key] = {
+                "positive": sorted(pos_columns),
+                "negative_n": len(neg_indexes),
+                "min_positive_n": minimums[key][0],
+                "min_negative_n": minimums[key][1],
+            }
 
         for row in reader:
             gene, entrez = parse_gene(row[0])
             for key, (pos_indexes, neg_indexes, _) in indexes.items():
                 positive_values = values_at(row, pos_indexes)
                 negative_values = values_at(row, neg_indexes)
-                if not positive_values or not negative_values:
+                min_positive_n, min_negative_n = minimums[key]
+                if len(positive_values) < min_positive_n or len(negative_values) < min_negative_n:
                     continue
                 positive_average = sum(positive_values) / len(positive_values)
                 negative_average = sum(negative_values) / len(negative_values)
@@ -325,6 +340,12 @@ def add_ranks(rows: list[dict[str, object]]) -> None:
     rows.sort(key=lambda x: (float(x["score"]), str(x["gene"])))
     for rank, row in enumerate(rows, start=1):
         row["rank"] = rank
+
+
+def min_values_for_group(group_size: int) -> int:
+    if group_size <= 0:
+        return 1
+    return min(group_size, max(MIN_GROUP_VALUES, math.ceil(group_size * MIN_GROUP_COVERAGE)))
 
 
 def compact_rows(rows: list[dict[str, object]]) -> list[list[object]]:

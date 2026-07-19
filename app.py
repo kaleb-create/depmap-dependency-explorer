@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,8 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "app.db"))
 DEPENDENCY_SUMMARY_PATH = os.path.join(BASE_DIR, "static", "data", "hpv_dependency_summary.json")
 UTC = timezone.utc
+MIN_DEPENDENCY_GROUP_VALUES = 3
+MIN_DEPENDENCY_GROUP_COVERAGE = 0.5
 
 
 app = Flask(__name__)
@@ -419,7 +422,42 @@ def custom_stratifier_analysis(row: sqlite3.Row) -> dict[str, Any]:
     analysis["id"] = f"custom-{row['id']}"
     analysis["label"] = f"{analysis['label']} *"
     analysis["custom_id"] = row["id"]
+    filter_low_coverage_rows(analysis)
     return analysis
+
+
+def filter_low_coverage_rows(analysis: dict[str, Any]) -> None:
+    for dataset_key, rows in analysis.get("datasets", {}).items():
+        included = analysis.get("included_models", {}).get(dataset_key, {})
+        min_positive_n = int(
+            included.get("min_positive_n")
+            or min_dependency_values(len(included.get("positive") or []))
+        )
+        min_negative_n = int(
+            included.get("min_negative_n")
+            or min_dependency_values(int(included.get("negative_n") or 0))
+        )
+        filtered_rows = sorted(
+            [
+                row
+                for row in rows
+                if len(row) >= 6 and row[4] >= min_positive_n and row[5] >= min_negative_n
+            ],
+            key=lambda x: (float(x[1]), str(x[0])),
+        )
+        for rank, row in enumerate(filtered_rows, start=1):
+            if len(row) >= 7:
+                row[6] = rank
+        analysis["datasets"][dataset_key] = filtered_rows
+
+
+def min_dependency_values(group_size: int) -> int:
+    if group_size <= 0:
+        return 1
+    return min(
+        group_size,
+        max(MIN_DEPENDENCY_GROUP_VALUES, math.ceil(group_size * MIN_DEPENDENCY_GROUP_COVERAGE)),
+    )
 
 
 def build_dependency_summary() -> dict[str, Any]:

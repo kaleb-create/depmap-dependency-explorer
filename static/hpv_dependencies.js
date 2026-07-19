@@ -206,7 +206,7 @@ function renderMeta() {
     </div>
     <div>
       <strong>Screened comparison sets</strong>
-      <span class="small-line">CRISPR: ${crisprCounts.positive.length} ${escapeHtml(activeAnalysis.positive_label)} vs ${crisprCounts.negative_n} ${escapeHtml(activeAnalysis.negative_label)}. siRNA: ${rnaiCounts.positive.length} ${escapeHtml(activeAnalysis.positive_label)} vs ${rnaiCounts.negative_n} ${escapeHtml(activeAnalysis.negative_label)}.</span>
+      <span class="small-line">CRISPR: ${crisprCounts.positive.length} ${escapeHtml(activeAnalysis.positive_label)} vs ${crisprCounts.negative_n} ${escapeHtml(activeAnalysis.negative_label)}; genes require ${crisprCounts.min_positive_n || 1}+ / ${crisprCounts.min_negative_n || 1}+ values. siRNA: ${rnaiCounts.positive.length} ${escapeHtml(activeAnalysis.positive_label)} vs ${rnaiCounts.negative_n} ${escapeHtml(activeAnalysis.negative_label)}; genes require ${rnaiCounts.min_positive_n || 1}+ / ${rnaiCounts.min_negative_n || 1}+ values.</span>
     </div>
     <details class="model-details">
       <summary>${positiveModels.length.toLocaleString()} positive-group DepMap models</summary>

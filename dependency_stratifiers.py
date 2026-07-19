@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import os
 import urllib.request
 from typing import Any
@@ -18,6 +19,8 @@ MODEL_PATH = os.path.join(DATA_DIR, "Model.csv")
 
 OPENAI_API_URL = "https://api.openai.com/v1/responses"
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.5")
+MIN_GROUP_VALUES = 3
+MIN_GROUP_COVERAGE = 0.5
 
 
 def load_model_rows() -> list[dict[str, str]]:
@@ -124,8 +127,10 @@ def row_pair_differential(matrix_path: str, positive_ids: set[str], negative_ids
                     continue
 
     rows = []
+    min_positive_n = min_values_for_group(len(positive_rows))
+    min_negative_n = min_values_for_group(len(negative_rows))
     for i, label in enumerate(labels):
-        if not positive_counts[i] or not negative_counts[i]:
+        if positive_counts[i] < min_positive_n or negative_counts[i] < min_negative_n:
             continue
         positive_average = positive_sums[i] / positive_counts[i]
         negative_average = negative_sums[i] / negative_counts[i]
@@ -141,7 +146,12 @@ def row_pair_differential(matrix_path: str, positive_ids: set[str], negative_ids
             }
         )
     add_ranks(rows)
-    return rows, {"positive": sorted(positive_rows), "negative_n": len(negative_rows)}
+    return rows, {
+        "positive": sorted(positive_rows),
+        "negative_n": len(negative_rows),
+        "min_positive_n": min_positive_n,
+        "min_negative_n": min_negative_n,
+    }
 
 
 def column_pair_differential(
@@ -164,11 +174,13 @@ def column_pair_differential(
                 negative_indexes.append(i)
                 negative_used.append(column)
 
+        min_positive_n = min_values_for_group(len(positive_indexes))
+        min_negative_n = min_values_for_group(len(negative_indexes))
         rows = []
         for row in reader:
             positive_values = values_at(row, positive_indexes)
             negative_values = values_at(row, negative_indexes)
-            if not positive_values or not negative_values:
+            if len(positive_values) < min_positive_n or len(negative_values) < min_negative_n:
                 continue
             positive_average = sum(positive_values) / len(positive_values)
             negative_average = sum(negative_values) / len(negative_values)
@@ -184,7 +196,18 @@ def column_pair_differential(
                 }
             )
     add_ranks(rows)
-    return rows, {"positive": sorted(positive_used), "negative_n": len(negative_used)}
+    return rows, {
+        "positive": sorted(positive_used),
+        "negative_n": len(negative_used),
+        "min_positive_n": min_positive_n,
+        "min_negative_n": min_negative_n,
+    }
+
+
+def min_values_for_group(group_size: int) -> int:
+    if group_size <= 0:
+        return 1
+    return min(group_size, max(MIN_GROUP_VALUES, math.ceil(group_size * MIN_GROUP_COVERAGE)))
 
 
 def choose_models(model_rows: list[dict[str, str]], spec: dict[str, Any]) -> set[str]:
