@@ -573,62 +573,21 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    db = get_db()
-
-    proposed = db.execute(
-        """
-        SELECT b.*, u.first_name AS creator_name,
-               (SELECT COUNT(*) FROM bet_approvals ba WHERE ba.bet_id = b.id) AS approval_count
-        FROM bets b
-        JOIN users u ON u.id = b.creator_id
-        WHERE b.status='proposed'
-        ORDER BY b.created_at DESC
-        """
-    ).fetchall()
-
-    active = db.execute(
-        """
-        SELECT b.*, u.first_name AS creator_name
-        FROM bets b
-        JOIN users u ON u.id = b.creator_id
-        WHERE b.status='active'
-        ORDER BY b.close_at ASC
-        """
-    ).fetchall()
-
-    resolved = db.execute(
-        """
-        SELECT b.*, u.first_name AS creator_name
-        FROM bets b
-        JOIN users u ON u.id = b.creator_id
-        WHERE b.status='resolved'
-        ORDER BY b.resolve_at DESC
-        LIMIT 20
-        """
-    ).fetchall()
-
-    leaderboard = fetch_leaderboard()
-
-    return render_template(
-        "dashboard.html",
-        proposed=proposed,
-        active=active,
-        resolved=resolved,
-        leaderboard=leaderboard,
-    )
+    return render_template("dashboard.html")
 
 
 @app.route("/leaderboard")
 @login_required
 def leaderboard():
-    leaderboard_data = fetch_leaderboard()
-    return render_template("leaderboard.html", leaderboard=leaderboard_data)
+    return redirect(url_for("hpv_dependencies"))
 
 
 @app.route("/bets/new", methods=["GET", "POST"])
 @login_required
 @roles_required("forecaster", "admin")
 def create_bet():
+    return redirect(url_for("hpv_dependencies"))
+
     if request.method == "POST":
         title = request.form.get("title", "").strip()
         description = request.form.get("description", "").strip()
@@ -704,6 +663,8 @@ def create_bet():
 @app.route("/bets/<int:bet_id>")
 @login_required
 def bet_detail(bet_id: int):
+    return redirect(url_for("hpv_dependencies"))
+
     db = get_db()
     bet = db.execute(
         """
@@ -789,6 +750,8 @@ def bet_detail(bet_id: int):
 @login_required
 @roles_required("forecaster", "admin")
 def approve_bet(bet_id: int):
+    return redirect(url_for("hpv_dependencies"))
+
     db = get_db()
     bet = db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
     if not bet:
@@ -833,6 +796,8 @@ def approve_bet(bet_id: int):
 @login_required
 @roles_required("admin")
 def discard_bet(bet_id: int):
+    return redirect(url_for("hpv_dependencies"))
+
     reason = request.form.get("reason", "").strip()
     db = get_db()
     bet = db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
@@ -857,6 +822,8 @@ def discard_bet(bet_id: int):
 @login_required
 @roles_required("forecaster", "admin")
 def submit_forecast(bet_id: int):
+    return redirect(url_for("hpv_dependencies"))
+
     db = get_db()
     bet = db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
     if not bet:
@@ -958,6 +925,8 @@ def submit_forecast(bet_id: int):
 @login_required
 @roles_required("admin")
 def resolve_bet(bet_id: int):
+    return redirect(url_for("hpv_dependencies"))
+
     db = get_db()
     bet = db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
     if not bet:
@@ -1117,7 +1086,7 @@ def admin_users():
 @app.route("/scoring")
 @login_required
 def scoring_explainer():
-    return render_template("scoring.html")
+    return redirect(url_for("hpv_dependencies"))
 
 
 @app.route("/hpv-dependencies")
@@ -1212,7 +1181,7 @@ def ret_allostery():
 
 @app.route("/ddx3-selectivity")
 def ddx3_selectivity():
-    return render_template("ddx3_selectivity.html")
+    return redirect(url_for("hpv_dependencies"))
 
 
 init_db()

@@ -16,14 +16,8 @@
       <nav>
         <a href="{{ url_for('dashboard') }}">Dashboard</a>
         <a href="{{ url_for('ret_allostery') }}">RET Allostery</a>
-        <a href="{{ url_for('ddx3_selectivity') }}">DDX3 Selectivity</a>
-        <a href="{{ url_for('leaderboard') }}">Leaderboard</a>
-        <a href="{{ url_for('scoring_explainer') }}">Scoring</a>
         <a href="{{ url_for('hpv_dependencies') }}">Dependencies</a>
         <a href="{{ url_for('manage_stratifiers') }}">Stratifiers</a>
-        {% if current_user['role'] in ['forecaster', 'admin'] %}
-        <a href="{{ url_for('create_bet') }}">New Bet</a>
-        {% endif %}
         {% if current_user['role'] == 'admin' %}
         <a href="{{ url_for('admin_users') }}">Users</a>
         {% endif %}

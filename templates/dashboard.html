@@ -3,90 +3,37 @@
 {% block content %}
 <section class="hero">
   <div>
-    <h1>Team Forecast Command Center</h1>
-    <p>Track approvals, submit forecasts, and compete on calibrated accuracy.</p>
+    <h1>Dependency Explorer</h1>
+    <p class="muted">Build, audit, and explore differential DepMap CRISPR and siRNA dependency analyses.</p>
   </div>
-  <a href="{{ url_for('create_bet') }}" class="btn-primary">Propose Bet</a>
+  <a href="{{ url_for('hpv_dependencies') }}" class="btn-primary">Open explorer</a>
 </section>
 
 <section class="panel-grid two-up">
   <article class="panel">
-    <h2>Top Forecasters</h2>
-    <table class="table">
-      <thead>
-        <tr><th>Rank</th><th>Name</th><th>Avg score</th><th>Resolved</th></tr>
-      </thead>
-      <tbody>
-        {% for row in leaderboard[:8] %}
-        <tr>
-          <td>#{{ row.rank }}</td>
-          <td>{{ row.first_name }}</td>
-          <td>{{ '%.2f'|format(row.avg_score) }}</td>
-          <td>{{ row.resolved_count }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="4">No resolved forecasts yet.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <h2>Differential Dependencies</h2>
+    <p class="muted">Compare CRISPR and siRNA dependency shifts across built-in HPV, oncogene, and tumor suppressor stratifiers.</p>
+    <a class="text-link" href="{{ url_for('hpv_dependencies') }}">Open dependency explorer</a>
   </article>
 
   <article class="panel">
-    <h2>Proposed Bets</h2>
-    <div class="card-list">
-      {% for bet in proposed %}
-      <a class="bet-card" href="{{ url_for('bet_detail', bet_id=bet.id) }}">
-        <div class="bet-card-top">
-          <span class="chip chip-proposed">Proposed</span>
-          <span>{{ bet.market_type|replace('_', ' ')|title }}</span>
-        </div>
-        <h3>{{ bet.title }}</h3>
-        <p>Creator: {{ bet.creator_name }} | Approvals: {{ bet.approval_count }}</p>
-        <p>Approval deadline: {{ bet.approval_deadline|dt }}</p>
-      </a>
-      {% else %}
-      <p>No pending proposals.</p>
-      {% endfor %}
-    </div>
+    <h2>Stratifiers</h2>
+    <p class="muted">Create plain-English cell-line contrasts, review cohort quality, and manage custom saved analyses.</p>
+    <a class="text-link" href="{{ url_for('manage_stratifiers') }}">Manage stratifiers</a>
   </article>
 </section>
 
 <section class="panel-grid two-up">
   <article class="panel">
-    <h2>Active Bets</h2>
-    <div class="card-list">
-      {% for bet in active %}
-      <a class="bet-card" href="{{ url_for('bet_detail', bet_id=bet.id) }}">
-        <div class="bet-card-top">
-          <span class="chip chip-active">Active</span>
-          <span>{{ bet.market_type|replace('_', ' ')|title }}</span>
-        </div>
-        <h3>{{ bet.title }}</h3>
-        <p>Created by {{ bet.creator_name }}</p>
-        <p>Closes: {{ bet.close_at|dt }}</p>
-      </a>
-      {% else %}
-      <p>No active bets right now.</p>
-      {% endfor %}
-    </div>
+    <h2>RET Allostery</h2>
+    <p class="muted">Inspect the retained RET allostery analysis and supporting structural views.</p>
+    <a class="text-link" href="{{ url_for('ret_allostery') }}">Open RET allostery</a>
   </article>
 
   <article class="panel">
-    <h2>Recently Resolved</h2>
-    <div class="card-list">
-      {% for bet in resolved %}
-      <a class="bet-card" href="{{ url_for('bet_detail', bet_id=bet.id) }}">
-        <div class="bet-card-top">
-          <span class="chip chip-resolved">Resolved</span>
-          <span>{{ bet.market_type|replace('_', ' ')|title }}</span>
-        </div>
-        <h3>{{ bet.title }}</h3>
-        <p>Resolve target: {{ bet.resolve_at|dt }}</p>
-      </a>
-      {% else %}
-      <p>No resolved bets yet.</p>
-      {% endfor %}
-    </div>
+    <h2>Data Quality</h2>
+    <p class="muted">Dependency genes are filtered for cohort coverage before ranking so sparse one-off measurements do not dominate the charts.</p>
+    <a class="text-link" href="{{ url_for('hpv_dependencies') }}">Review filtered analyses</a>
   </article>
 </section>
 {% endblock %}

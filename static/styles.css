@@ -536,40 +536,6 @@ input[type='range'] {
   background: #fff;
 }
 
-.ddx3-layout {
-  grid-template-columns: minmax(0, 1.25fr) minmax(300px, 0.75fr);
-}
-
-.ddx3-label-toggle {
-  width: fit-content;
-  margin-top: 14px;
-  font-weight: 500;
-}
-
-.ddx3-readouts {
-  display: grid;
-  gap: 12px;
-  margin-top: 16px;
-}
-
-.ddx3-readout {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 12px;
-  background: #fff;
-}
-
-.ddx3-readout h3 {
-  margin: 2px 0 4px;
-  font-size: 16px;
-}
-
-.ddx3-readout p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px;
-}
-
 @media (max-width: 980px) {
   .ret-hero,
   .ret-layout,
