@@ -1,5 +1,5 @@
 {% extends 'base.html' %}
-{% block title %}Dashboard | BioForecast Arena{% endblock %}
+{% block title %}Dashboard | DepMap Explorer{% endblock %}
 {% block content %}
 <section class="hero">
   <div>
@@ -25,9 +25,9 @@
 
 <section class="panel-grid two-up">
   <article class="panel">
-    <h2>RET Allostery</h2>
-    <p class="muted">Inspect the retained RET allostery analysis and supporting structural views.</p>
-    <a class="text-link" href="{{ url_for('ret_allostery') }}">Open RET allostery</a>
+    <h2>Dataset Provenance</h2>
+    <p class="muted">Review the source dataset, retrieval status, identifier mapping, cohort size, and limitations behind every custom stratifier.</p>
+    <a class="text-link" href="{{ url_for('manage_stratifiers') }}">Audit cohort sources</a>
   </article>
 
   <article class="panel">

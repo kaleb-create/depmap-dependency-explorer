@@ -3,6 +3,7 @@ __pycache__/
 app.db
 .venv/
 data/*.csv
+data/stratifier_sources/
 node_modules
 Secretome
 outputs/

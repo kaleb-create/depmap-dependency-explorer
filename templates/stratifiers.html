@@ -13,8 +13,12 @@
 
 <section class="panel stratifier-builder">
   <div>
-    <h2>New Plain-English Stratifier</h2>
-    <p class="small-line">Describe two DepMap model cohorts, like “pancreatic adenocarcinoma vs colorectal adenocarcinoma”. Saved stratifiers are remembered in the explorer dropdown.</p>
+    <h2>New Dataset-Backed Stratifier</h2>
+    <p class="small-line">Describe two cell-line populations. ChatGPT searches for an authoritative cohort dataset, retrieves supported tabular sources, maps them to DepMap models, and records the evidence with the saved analysis.</p>
+    <div class="api-status {{ 'api-status-ready' if openai_ready else 'api-status-missing' }}">
+      <strong>{{ 'ChatGPT connected' if openai_ready else 'ChatGPT API key required' }}</strong>
+      <span>{{ openai_model if openai_ready else 'Set OPENAI_API_KEY on the server to enable dataset search.' }}</span>
+    </div>
   </div>
   <form method="post" action="{{ url_for('create_stratifier') }}" class="stratifier-form">
     <label for="prompt">Cell-line difference</label>
@@ -25,7 +29,7 @@
       placeholder="KRAS mutant lung adenocarcinoma vs KRAS wild-type lung adenocarcinoma"
       required
     ></textarea>
-    <button class="btn-primary" type="submit">Create stratifier</button>
+    <button class="btn-primary" type="submit" {% if not openai_ready %}disabled{% endif %}>Find dataset and build</button>
   </form>
 </section>
 
@@ -39,9 +43,11 @@
             <h2>{{ stratifier.label }}</h2>
             <p class="muted">{{ stratifier.prompt }}</p>
           </div>
-          <form method="post" action="{{ url_for('delete_stratifier', stratifier_id=stratifier.id) }}">
-            <button class="btn-danger" type="submit">Delete</button>
-          </form>
+          {% if current_user['role'] == 'admin' %}
+            <form method="post" action="{{ url_for('delete_stratifier', stratifier_id=stratifier.id) }}">
+              <button class="btn-danger" type="submit">Delete</button>
+            </form>
+          {% endif %}
         </div>
         <div class="stratifier-stats">
           <div>
@@ -61,9 +67,52 @@
             <span>siRNA negative</span>
           </div>
         </div>
+        {% if stratifier.source.dataset %}
+          <details class="quality-details" open>
+            <summary>Dataset provenance</summary>
+            <div class="dataset-provenance">
+              <div>
+                <span class="data-label">Selected source</span>
+                <strong>{{ stratifier.source.dataset.name }}</strong>
+                <span>{{ stratifier.source.dataset.provider }}</span>
+              </div>
+              <div>
+                <span class="data-label">Retrieval</span>
+                <strong>{{ stratifier.source.retrieval.status|replace('_', ' ')|title }}</strong>
+                <span>
+                  {% if stratifier.source.retrieval.bytes %}
+                    {{ "%.1f"|format(stratifier.source.retrieval.bytes / 1048576) }} MB verified by SHA-256
+                  {% else %}
+                    Local DepMap metadata
+                  {% endif %}
+                </span>
+              </div>
+              <div>
+                <span class="data-label">DepMap mapping</span>
+                <strong>{{ stratifier.source.mapping.mapped_rows }} / {{ stratifier.source.mapping.rows }} rows</strong>
+                <span>{{ stratifier.source.mapping.identifier_column }} to ModelID</span>
+              </div>
+            </div>
+            <p>{{ stratifier.source.dataset.why_selected }}</p>
+            <p class="muted">{{ stratifier.source.dataset.mapping_notes }}</p>
+            {% if stratifier.source.dataset.source_url.startswith('http://') or stratifier.source.dataset.source_url.startswith('https://') %}
+              <a class="text-link" href="{{ stratifier.source.dataset.source_url }}" target="_blank" rel="noreferrer">Open source dataset</a>
+            {% endif %}
+            {% if stratifier.source.web_sources %}
+              <div class="source-links">
+                {% for source in stratifier.source.web_sources %}
+                  {% if source.url.startswith('http://') or source.url.startswith('https://') %}
+                    <a href="{{ source.url }}" target="_blank" rel="noreferrer">{{ source.title }}</a>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            {% endif %}
+          </details>
+        {% endif %}
         <details class="quality-details">
           <summary>Quality analysis</summary>
           <p>{{ stratifier.quality.summary }}</p>
+          {% if stratifier.quality.dataset_summary %}<p><strong>{{ stratifier.quality.dataset_summary }}</strong></p>{% endif %}
           <div class="quality-grid">
             <div>
               <strong>Strengths</strong>

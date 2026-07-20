@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{% block title %}BioForecast Arena{% endblock %}</title>
+    <title>{% block title %}DepMap Explorer{% endblock %}</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
     {% block head_extra %}{% endblock %}
   </head>
@@ -11,11 +11,10 @@
     <div class="bg-shape bg-shape-a"></div>
     <div class="bg-shape bg-shape-b"></div>
     <header class="topbar">
-      <a class="brand" href="{{ url_for('dashboard') }}">BioForecast Arena</a>
+      <a class="brand" href="{{ url_for('dashboard') }}">DepMap Explorer</a>
       {% if current_user %}
       <nav>
         <a href="{{ url_for('dashboard') }}">Dashboard</a>
-        <a href="{{ url_for('ret_allostery') }}">RET Allostery</a>
         <a href="{{ url_for('hpv_dependencies') }}">Dependencies</a>
         <a href="{{ url_for('manage_stratifiers') }}">Stratifiers</a>
         {% if current_user['role'] == 'admin' %}

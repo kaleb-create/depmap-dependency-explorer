@@ -2,7 +2,7 @@ import json
 import math
 import os
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from functools import wraps
 from typing import Any
 
@@ -46,16 +46,6 @@ def from_iso(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
 
 
-def parse_local_datetime(value: str) -> datetime:
-    # HTML datetime-local has no timezone; interpret as local server time and convert to UTC.
-    local_dt = datetime.strptime(value, "%Y-%m-%dT%H:%M")
-    return local_dt.astimezone()
-
-
-def clamp(num: float, low: float = 0.0, high: float = 1.0) -> float:
-    return max(low, min(high, num))
-
-
 def get_db() -> sqlite3.Connection:
     if "db" not in g:
         conn = sqlite3.connect(DB_PATH)
@@ -89,67 +79,6 @@ def init_db() -> None:
             role TEXT NOT NULL CHECK(role IN ('admin', 'forecaster', 'viewer')) DEFAULT 'forecaster',
             is_active INTEGER NOT NULL DEFAULT 1,
             created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS bets (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            description TEXT,
-            category TEXT,
-            market_type TEXT NOT NULL CHECK(market_type IN ('binary', 'numeric', 'multiple_choice')),
-            options_json TEXT,
-            creator_id INTEGER NOT NULL,
-            status TEXT NOT NULL CHECK(status IN ('proposed', 'active', 'resolved', 'discarded', 'expired')) DEFAULT 'proposed',
-            close_at TEXT NOT NULL,
-            resolve_at TEXT NOT NULL,
-            approval_deadline TEXT NOT NULL,
-            allow_multiple_resolutions INTEGER NOT NULL DEFAULT 1,
-            discarded_reason TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (creator_id) REFERENCES users(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS bet_approvals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            bet_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            approved_at TEXT NOT NULL,
-            UNIQUE (bet_id, user_id),
-            FOREIGN KEY (bet_id) REFERENCES bets(id) ON DELETE CASCADE,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS forecasts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            bet_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            choice TEXT,
-            probability_yes REAL,
-            point_estimate REAL,
-            confidence REAL NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            locked_at TEXT NOT NULL,
-            UNIQUE (bet_id, user_id),
-            FOREIGN KEY (bet_id) REFERENCES bets(id) ON DELETE CASCADE,
-            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS resolutions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            bet_id INTEGER NOT NULL,
-            label TEXT NOT NULL,
-            outcome_binary INTEGER,
-            outcome_numeric REAL,
-            outcome_option TEXT,
-            weight REAL NOT NULL DEFAULT 1.0,
-            source_url TEXT,
-            notes TEXT,
-            is_void INTEGER NOT NULL DEFAULT 0,
-            resolver_id INTEGER NOT NULL,
-            resolved_at TEXT NOT NULL,
-            FOREIGN KEY (bet_id) REFERENCES bets(id) ON DELETE CASCADE,
-            FOREIGN KEY (resolver_id) REFERENCES users(id)
         );
 
         CREATE TABLE IF NOT EXISTS audit_logs (
@@ -206,37 +135,6 @@ def log_event(actor_id: int | None, event_type: str, entity_type: str, entity_id
     db.commit()
 
 
-def refresh_bet_statuses() -> None:
-    db = get_db()
-    ts = to_iso(now_utc())
-
-    db.execute(
-        """
-        UPDATE bets
-        SET status='expired'
-        WHERE status='proposed' AND approval_deadline < ?
-        """,
-        (ts,),
-    )
-
-    db.execute(
-        """
-        UPDATE bets
-        SET status='active'
-        WHERE status='proposed'
-          AND approval_deadline >= ?
-          AND EXISTS (
-            SELECT 1
-            FROM bet_approvals ba
-            WHERE ba.bet_id = bets.id AND ba.user_id != bets.creator_id
-          )
-        """,
-        (ts,),
-    )
-
-    db.commit()
-
-
 def get_user(user_id: int) -> sqlite3.Row | None:
     db = get_db()
     return db.execute("SELECT * FROM users WHERE id=? AND is_active=1", (user_id,)).fetchone()
@@ -272,134 +170,6 @@ def roles_required(*roles: str):
         return wrapper
 
     return decorator
-
-
-def can_approve_bet(user: sqlite3.Row, bet: sqlite3.Row) -> bool:
-    if user["role"] not in {"forecaster", "admin"}:
-        return False
-    if user["id"] == bet["creator_id"]:
-        return False
-    if bet["status"] != "proposed":
-        return False
-    return from_iso(bet["approval_deadline"]) >= now_utc()
-
-
-def get_forecast_for_user(bet_id: int, user_id: int) -> sqlite3.Row | None:
-    db = get_db()
-    return db.execute("SELECT * FROM forecasts WHERE bet_id=? AND user_id=?", (bet_id, user_id)).fetchone()
-
-
-def can_view_forecasts(user: sqlite3.Row, bet_id: int) -> bool:
-    if user["role"] in {"admin", "viewer"}:
-        return True
-    own = get_forecast_for_user(bet_id, user["id"])
-    return own is not None
-
-
-def score_binary(prob_yes: float, outcome: int) -> float:
-    brier = (prob_yes - float(outcome)) ** 2
-    return clamp(1.0 - brier) * 100.0
-
-
-def score_numeric(point_estimate: float, confidence: float, actual: float) -> float:
-    scale = max(abs(actual), 1.0)
-    relative_error = abs(point_estimate - actual) / scale
-    distance_component = clamp(1.0 - relative_error)
-
-    # Confidence is treated as probability that estimate lands in +/-10% band.
-    hit = 1.0 if relative_error <= 0.10 else 0.0
-    confidence_component = clamp(1.0 - ((confidence - hit) ** 2))
-
-    score = (0.65 * distance_component) + (0.35 * confidence_component)
-    return clamp(score) * 100.0
-
-
-def score_multiple(choice: str, confidence: float, outcome_option: str) -> float:
-    outcome = 1 if choice == outcome_option else 0
-    return score_binary(confidence, outcome)
-
-
-def resolve_score_for_bet(bet: sqlite3.Row, forecast: sqlite3.Row, resolutions: list[sqlite3.Row]) -> float | None:
-    active_resolutions = [r for r in resolutions if r["is_void"] == 0]
-    if not active_resolutions:
-        return None
-
-    weighted_total = 0.0
-    weight_sum = 0.0
-
-    for res in active_resolutions:
-        weight = float(res["weight"] or 1.0)
-        market_type = bet["market_type"]
-
-        if market_type == "binary":
-            if res["outcome_binary"] is None or forecast["probability_yes"] is None:
-                continue
-            sc = score_binary(float(forecast["probability_yes"]), int(res["outcome_binary"]))
-        elif market_type == "numeric":
-            if res["outcome_numeric"] is None or forecast["point_estimate"] is None:
-                continue
-            sc = score_numeric(float(forecast["point_estimate"]), float(forecast["confidence"]), float(res["outcome_numeric"]))
-        else:
-            if not res["outcome_option"] or not forecast["choice"]:
-                continue
-            sc = score_multiple(str(forecast["choice"]), float(forecast["confidence"]), str(res["outcome_option"]))
-
-        weighted_total += (sc * weight)
-        weight_sum += weight
-
-    if weight_sum == 0:
-        return None
-    return round(weighted_total / weight_sum, 2)
-
-
-def fetch_leaderboard() -> list[dict[str, Any]]:
-    db = get_db()
-
-    users = db.execute(
-        """
-        SELECT id, first_name, role
-        FROM users
-        WHERE is_active=1 AND role IN ('forecaster', 'admin')
-        ORDER BY first_name
-        """
-    ).fetchall()
-
-    resolved_bets = db.execute("SELECT * FROM bets WHERE status='resolved'").fetchall()
-    resolutions_by_bet: dict[int, list[sqlite3.Row]] = {}
-    for bet in resolved_bets:
-        rows = db.execute("SELECT * FROM resolutions WHERE bet_id=?", (bet["id"],)).fetchall()
-        resolutions_by_bet[bet["id"]] = rows
-
-    leaderboard: list[dict[str, Any]] = []
-
-    for user in users:
-        scores: list[float] = []
-        for bet in resolved_bets:
-            forecast = db.execute(
-                "SELECT * FROM forecasts WHERE bet_id=? AND user_id=?",
-                (bet["id"], user["id"]),
-            ).fetchone()
-            if not forecast:
-                continue
-            score = resolve_score_for_bet(bet, forecast, resolutions_by_bet.get(bet["id"], []))
-            if score is not None:
-                scores.append(score)
-
-        avg_score = round(sum(scores) / len(scores), 2) if scores else 0.0
-        leaderboard.append(
-            {
-                "user_id": user["id"],
-                "first_name": user["first_name"],
-                "role": user["role"],
-                "avg_score": avg_score,
-                "resolved_count": len(scores),
-            }
-        )
-
-    leaderboard.sort(key=lambda x: (x["avg_score"], x["resolved_count"]), reverse=True)
-    for idx, entry in enumerate(leaderboard, start=1):
-        entry["rank"] = idx
-    return leaderboard
 
 
 def load_builtin_dependency_summary() -> dict[str, Any]:
@@ -480,8 +250,6 @@ def quality_status(analysis: dict[str, Any], quality: dict[str, Any]) -> str:
 @app.before_request
 def hydrate_user() -> None:
     g.user = current_user()
-    if g.user:
-        refresh_bet_statuses()
 
 
 @app.context_processor
@@ -577,442 +345,14 @@ def dashboard():
 
 
 @app.route("/leaderboard")
-@login_required
-def leaderboard():
-    return redirect(url_for("hpv_dependencies"))
-
-
 @app.route("/bets/new", methods=["GET", "POST"])
-@login_required
-@roles_required("forecaster", "admin")
-def create_bet():
-    return redirect(url_for("hpv_dependencies"))
-
-    if request.method == "POST":
-        title = request.form.get("title", "").strip()
-        description = request.form.get("description", "").strip()
-        category = request.form.get("category", "").strip()
-        market_type = request.form.get("market_type", "").strip()
-        close_at_raw = request.form.get("close_at", "")
-        resolve_at_raw = request.form.get("resolve_at", "")
-        options_raw = request.form.get("options", "").strip()
-
-        if not title or market_type not in {"binary", "numeric", "multiple_choice"}:
-            flash("Title and a valid market type are required.", "error")
-            return render_template("bet_form.html")
-
-        try:
-            close_at = parse_local_datetime(close_at_raw)
-            resolve_at = parse_local_datetime(resolve_at_raw)
-        except ValueError:
-            flash("Invalid close or resolve date.", "error")
-            return render_template("bet_form.html")
-
-        now = now_utc()
-        if close_at <= now:
-            flash("Close time must be in the future.", "error")
-            return render_template("bet_form.html")
-        if resolve_at <= close_at:
-            flash("Resolve time must be after close time.", "error")
-            return render_template("bet_form.html")
-
-        options_json = None
-        if market_type == "multiple_choice":
-            options = [line.strip() for line in options_raw.splitlines() if line.strip()]
-            if len(options) < 2:
-                flash("Multiple choice bets need at least two options.", "error")
-                return render_template("bet_form.html")
-            options_json = json.dumps(options)
-
-        approval_deadline = min(now + timedelta(days=5), close_at)
-
-        db = get_db()
-        cur = db.execute(
-            """
-            INSERT INTO bets (
-                title, description, category, market_type, options_json,
-                creator_id, status, close_at, resolve_at, approval_deadline,
-                allow_multiple_resolutions, created_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, 'proposed', ?, ?, ?, 1, ?)
-            """,
-            (
-                title,
-                description,
-                category,
-                market_type,
-                options_json,
-                current_user()["id"],
-                to_iso(close_at),
-                to_iso(resolve_at),
-                to_iso(approval_deadline),
-                to_iso(now),
-            ),
-        )
-        bet_id = cur.lastrowid
-        db.commit()
-
-        log_event(current_user()["id"], "bet_created", "bet", bet_id, {"title": title, "market_type": market_type})
-
-        flash("Bet proposed. It becomes active after one non-creator approval.", "success")
-        return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    return render_template("bet_form.html")
-
-
 @app.route("/bets/<int:bet_id>")
-@login_required
-def bet_detail(bet_id: int):
-    return redirect(url_for("hpv_dependencies"))
-
-    db = get_db()
-    bet = db.execute(
-        """
-        SELECT b.*, u.first_name AS creator_name
-        FROM bets b
-        JOIN users u ON u.id = b.creator_id
-        WHERE b.id=?
-        """,
-        (bet_id,),
-    ).fetchone()
-
-    if not bet:
-        flash("Bet not found.", "error")
-        return redirect(url_for("dashboard"))
-
-    approvals = db.execute(
-        """
-        SELECT ba.*, u.first_name
-        FROM bet_approvals ba
-        JOIN users u ON u.id = ba.user_id
-        WHERE ba.bet_id=?
-        ORDER BY ba.approved_at ASC
-        """,
-        (bet_id,),
-    ).fetchall()
-
-    own_forecast = get_forecast_for_user(bet_id, current_user()["id"])
-
-    forecasts = []
-    if can_view_forecasts(current_user(), bet_id):
-        forecasts = db.execute(
-            """
-            SELECT f.*, u.first_name
-            FROM forecasts f
-            JOIN users u ON u.id = f.user_id
-            WHERE f.bet_id=?
-            ORDER BY f.updated_at DESC
-            """,
-            (bet_id,),
-        ).fetchall()
-
-    resolutions = db.execute(
-        """
-        SELECT r.*, u.first_name AS resolver_name
-        FROM resolutions r
-        JOIN users u ON u.id = r.resolver_id
-        WHERE r.bet_id=?
-        ORDER BY r.resolved_at DESC
-        """,
-        (bet_id,),
-    ).fetchall()
-
-    options = json.loads(bet["options_json"]) if bet["options_json"] else []
-    now = now_utc()
-    close_dt = from_iso(bet["close_at"])
-
-    can_submit_forecast = (
-        current_user()["role"] in {"forecaster", "admin"}
-        and bet["status"] == "active"
-        and now <= close_dt
-    )
-
-    can_edit = False
-    if own_forecast:
-        can_edit = now <= from_iso(own_forecast["locked_at"]) and now <= close_dt and bet["status"] == "active"
-
-    return render_template(
-        "bet_detail.html",
-        bet=bet,
-        approvals=approvals,
-        own_forecast=own_forecast,
-        forecasts=forecasts,
-        resolutions=resolutions,
-        options=options,
-        can_approve=can_approve_bet(current_user(), bet),
-        can_submit_forecast=can_submit_forecast,
-        can_edit=can_edit,
-        can_view_forecast_list=can_view_forecasts(current_user(), bet_id),
-    )
-
-
 @app.route("/bets/<int:bet_id>/approve", methods=["POST"])
-@login_required
-@roles_required("forecaster", "admin")
-def approve_bet(bet_id: int):
-    return redirect(url_for("hpv_dependencies"))
-
-    db = get_db()
-    bet = db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
-    if not bet:
-        flash("Bet not found.", "error")
-        return redirect(url_for("dashboard"))
-
-    if not can_approve_bet(current_user(), bet):
-        flash("You cannot approve this bet.", "error")
-        return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    exists = db.execute(
-        "SELECT id FROM bet_approvals WHERE bet_id=? AND user_id=?",
-        (bet_id, current_user()["id"]),
-    ).fetchone()
-    if exists:
-        flash("You already approved this bet.", "error")
-        return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    db.execute(
-        "INSERT INTO bet_approvals (bet_id, user_id, approved_at) VALUES (?, ?, ?)",
-        (bet_id, current_user()["id"], to_iso(now_utc())),
-    )
-
-    db.execute(
-        """
-        UPDATE bets
-        SET status='active'
-        WHERE id=? AND status='proposed'
-        """,
-        (bet_id,),
-    )
-
-    db.commit()
-
-    log_event(current_user()["id"], "bet_approved", "bet", bet_id, {})
-
-    flash("Bet approved and activated.", "success")
-    return redirect(url_for("bet_detail", bet_id=bet_id))
-
-
 @app.route("/bets/<int:bet_id>/discard", methods=["POST"])
-@login_required
-@roles_required("admin")
-def discard_bet(bet_id: int):
-    return redirect(url_for("hpv_dependencies"))
-
-    reason = request.form.get("reason", "").strip()
-    db = get_db()
-    bet = db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
-    if not bet:
-        flash("Bet not found.", "error")
-        return redirect(url_for("dashboard"))
-
-    if bet["status"] in {"resolved", "discarded"}:
-        flash("Bet cannot be discarded in its current state.", "error")
-        return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    db.execute("UPDATE bets SET status='discarded', discarded_reason=? WHERE id=?", (reason, bet_id))
-    db.commit()
-
-    log_event(current_user()["id"], "bet_discarded", "bet", bet_id, {"reason": reason})
-
-    flash("Bet discarded.", "success")
-    return redirect(url_for("bet_detail", bet_id=bet_id))
-
-
 @app.route("/bets/<int:bet_id>/forecast", methods=["POST"])
-@login_required
-@roles_required("forecaster", "admin")
-def submit_forecast(bet_id: int):
-    return redirect(url_for("hpv_dependencies"))
-
-    db = get_db()
-    bet = db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
-    if not bet:
-        flash("Bet not found.", "error")
-        return redirect(url_for("dashboard"))
-
-    if bet["status"] != "active":
-        flash("This bet is not active.", "error")
-        return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    now = now_utc()
-    if now > from_iso(bet["close_at"]):
-        flash("Forecasting window has closed.", "error")
-        return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    confidence_raw = request.form.get("confidence", "")
-    try:
-        confidence = float(confidence_raw) / 100.0
-    except ValueError:
-        flash("Invalid confidence value.", "error")
-        return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    confidence = clamp(confidence, 0.5, 1.0)
-
-    choice = None
-    probability_yes = None
-    point_estimate = None
-
-    if bet["market_type"] == "binary":
-        choice = request.form.get("choice", "").strip().lower()
-        if choice not in {"yes", "no"}:
-            flash("Binary bets require Yes or No.", "error")
-            return redirect(url_for("bet_detail", bet_id=bet_id))
-        probability_yes = confidence if choice == "yes" else (1.0 - confidence)
-
-    elif bet["market_type"] == "numeric":
-        point_raw = request.form.get("point_estimate", "")
-        try:
-            point_estimate = float(point_raw)
-        except ValueError:
-            flash("Numeric bets require a valid point estimate.", "error")
-            return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    else:
-        choice = request.form.get("choice", "").strip()
-        options = json.loads(bet["options_json"] or "[]")
-        if choice not in options:
-            flash("Invalid option selected.", "error")
-            return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    existing = get_forecast_for_user(bet_id, current_user()["id"])
-
-    if existing:
-        if now > from_iso(existing["locked_at"]):
-            flash("Your 10-minute edit window has ended.", "error")
-            return redirect(url_for("bet_detail", bet_id=bet_id))
-
-        db.execute(
-            """
-            UPDATE forecasts
-            SET choice=?, probability_yes=?, point_estimate=?, confidence=?, updated_at=?
-            WHERE id=?
-            """,
-            (choice, probability_yes, point_estimate, confidence, to_iso(now), existing["id"]),
-        )
-        db.commit()
-        log_event(current_user()["id"], "forecast_updated", "bet", bet_id, {"user_id": current_user()["id"]})
-        flash("Forecast updated.", "success")
-    else:
-        lock_time = min(now + timedelta(minutes=10), from_iso(bet["close_at"]))
-        db.execute(
-            """
-            INSERT INTO forecasts (
-                bet_id, user_id, choice, probability_yes, point_estimate,
-                confidence, created_at, updated_at, locked_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                bet_id,
-                current_user()["id"],
-                choice,
-                probability_yes,
-                point_estimate,
-                confidence,
-                to_iso(now),
-                to_iso(now),
-                to_iso(lock_time),
-            ),
-        )
-        db.commit()
-        log_event(current_user()["id"], "forecast_submitted", "bet", bet_id, {"user_id": current_user()["id"]})
-        flash("Forecast submitted.", "success")
-
-    return redirect(url_for("bet_detail", bet_id=bet_id))
-
-
 @app.route("/bets/<int:bet_id>/resolve", methods=["POST"])
-@login_required
-@roles_required("admin")
-def resolve_bet(bet_id: int):
+def legacy_depmap_redirect(bet_id=None):
     return redirect(url_for("hpv_dependencies"))
-
-    db = get_db()
-    bet = db.execute("SELECT * FROM bets WHERE id=?", (bet_id,)).fetchone()
-    if not bet:
-        flash("Bet not found.", "error")
-        return redirect(url_for("dashboard"))
-
-    label = request.form.get("label", "").strip() or "Primary"
-    source_url = request.form.get("source_url", "").strip()
-    notes = request.form.get("notes", "").strip()
-    weight_raw = request.form.get("weight", "1")
-    void_raw = request.form.get("is_void", "0")
-
-    try:
-        weight = max(0.1, float(weight_raw))
-    except ValueError:
-        weight = 1.0
-
-    is_void = 1 if void_raw == "1" else 0
-
-    outcome_binary = None
-    outcome_numeric = None
-    outcome_option = None
-
-    if bet["market_type"] == "binary":
-        resolved_value = request.form.get("outcome_binary", "").strip().lower()
-        if resolved_value not in {"yes", "no"}:
-            flash("Binary resolution requires Yes or No.", "error")
-            return redirect(url_for("bet_detail", bet_id=bet_id))
-        outcome_binary = 1 if resolved_value == "yes" else 0
-
-    elif bet["market_type"] == "numeric":
-        numeric_raw = request.form.get("outcome_numeric", "").strip()
-        try:
-            outcome_numeric = float(numeric_raw)
-        except ValueError:
-            flash("Numeric resolution requires a valid number.", "error")
-            return redirect(url_for("bet_detail", bet_id=bet_id))
-
-    else:
-        selected = request.form.get("outcome_option", "").strip()
-        options = json.loads(bet["options_json"] or "[]")
-        if selected not in options:
-            flash("Resolution option must match one of the configured options.", "error")
-            return redirect(url_for("bet_detail", bet_id=bet_id))
-        outcome_option = selected
-
-    db.execute(
-        """
-        INSERT INTO resolutions (
-            bet_id, label, outcome_binary, outcome_numeric, outcome_option, weight,
-            source_url, notes, is_void, resolver_id, resolved_at
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            bet_id,
-            label,
-            outcome_binary,
-            outcome_numeric,
-            outcome_option,
-            weight,
-            source_url,
-            notes,
-            is_void,
-            current_user()["id"],
-            to_iso(now_utc()),
-        ),
-    )
-
-    db.execute("UPDATE bets SET status='resolved' WHERE id=?", (bet_id,))
-    db.commit()
-
-    log_event(
-        current_user()["id"],
-        "bet_resolved",
-        "bet",
-        bet_id,
-        {
-            "label": label,
-            "is_void": is_void,
-            "weight": weight,
-        },
-    )
-
-    flash("Resolution recorded. You can add more resolutions if needed.", "success")
-    return redirect(url_for("bet_detail", bet_id=bet_id))
 
 
 @app.route("/admin/users", methods=["GET", "POST"])
@@ -1122,7 +462,12 @@ def manage_stratifiers():
                 "updated_at": row["updated_at"],
             }
         )
-    return render_template("stratifiers.html", stratifiers=rows)
+    return render_template(
+        "stratifiers.html",
+        stratifiers=rows,
+        openai_ready=bool(os.environ.get("OPENAI_API_KEY")),
+        openai_model=os.environ.get("OPENAI_MODEL", "gpt-5.5"),
+    )
 
 
 @app.route("/stratifiers", methods=["POST"])
@@ -1176,7 +521,7 @@ def delete_stratifier(stratifier_id: int):
 
 @app.route("/ret-allostery")
 def ret_allostery():
-    return render_template("ret_allostery.html")
+    return redirect(url_for("hpv_dependencies"))
 
 
 @app.route("/ddx3-selectivity")

@@ -24,6 +24,9 @@ ADMIN_PASSWORD=<initial admin password>
 ADMIN_FIRST_NAME=<initial admin first name>
 DB_PATH=/var/data/app.db
 DEPMAP_DATA_DIR=/var/data/depmap
+STRATIFIER_DATASET_DIR=/var/data/stratifier_sources
+MAX_STRATIFIER_DATASET_BYTES=26214400
+MAX_STRATIFIER_DATASET_ROWS=250000
 ```
 
 `DB_PATH` must live on persistent storage if you want saved stratifiers and
@@ -33,6 +36,11 @@ used to compute new stratifiers:
 - `CRISPRGeneEffect.csv`
 - `D2_combined_gene_dep_scores.csv`
 - `Model.csv`
+
+`STRATIFIER_DATASET_DIR` stores the source tables selected by ChatGPT web
+search. Keep it on persistent storage so saved provenance remains auditable
+across redeploys. Downloads are restricted to public HTTP(S) addresses and to
+the configured byte and row limits.
 
 ## Populating DepMap Data
 

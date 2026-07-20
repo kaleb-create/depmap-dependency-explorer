@@ -1,7 +1,11 @@
 import csv
+import hashlib
+import ipaddress
 import json
 import math
 import os
+import socket
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -19,8 +23,53 @@ MODEL_PATH = os.path.join(DATA_DIR, "Model.csv")
 
 OPENAI_API_URL = "https://api.openai.com/v1/responses"
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.5")
+STRATIFIER_DATASET_DIR = os.environ.get(
+    "STRATIFIER_DATASET_DIR", os.path.join(DATA_DIR, "stratifier_sources")
+)
+MAX_DATASET_BYTES = int(os.environ.get("MAX_STRATIFIER_DATASET_BYTES", 25 * 1024 * 1024))
+MAX_DATASET_ROWS = int(os.environ.get("MAX_STRATIFIER_DATASET_ROWS", 250_000))
 MIN_GROUP_VALUES = 3
 MIN_GROUP_COVERAGE = 0.5
+
+IDENTIFIER_COLUMNS = (
+    "ModelID",
+    "DepMap_ID",
+    "DepMapID",
+    "model_id",
+    "CCLEName",
+    "CCLE_Name",
+    "cell_line_name",
+    "CellLineName",
+    "StrippedCellLineName",
+    "RRID",
+    "COSMICID",
+)
+
+
+def normalized(value: object) -> str:
+    return "".join(character for character in str(value or "").casefold() if character.isalnum())
+
+
+def validate_public_url(url: str) -> None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Dataset download URL must be a public HTTP or HTTPS address.")
+
+    try:
+        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"Could not resolve dataset host {parsed.hostname}.") from exc
+
+    for address in addresses:
+        ip = ipaddress.ip_address(address[4][0])
+        if not ip.is_global:
+            raise ValueError("Dataset download URL resolves to a non-public network address.")
+
+
+class PublicRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        validate_public_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def load_model_rows() -> list[dict[str, str]]:
@@ -226,46 +275,237 @@ def available_taxonomy(model_rows: list[dict[str, str]]) -> dict[str, list[str]]
     return taxonomy
 
 
-def fallback_spec(prompt: str) -> dict[str, Any]:
-    lowered = prompt.lower()
-    left, _, right = lowered.partition(" vs ")
-    if not right:
-        left, _, right = lowered.partition(" versus ")
-    if not right:
-        left, _, right = lowered.partition(" compared to ")
-    right = right or "all other"
-    left = left.replace("cell lines", "").replace("cells", "").strip()
-    right = right.replace("cell lines", "").replace("cells", "").strip()
-    return {
-        "label": f"{left.title()} vs {right.title()}",
-        "positive_label": left.title() or "Positive",
-        "negative_label": right.title() or "Negative",
-        "positive": {"include_terms": [left], "exclude_terms": []},
-        "negative": {"include_terms": [] if "all other" in right else [right], "exclude_terms": [left]},
-        "quality": {
-            "summary": "Created with a local keyword fallback because OPENAI_API_KEY is not configured.",
-            "strengths": ["Uses DepMap model metadata directly."],
-            "weaknesses": ["Keyword matching may miss aliases or include broader disease labels than intended."],
-            "recommended_checks": ["Set OPENAI_API_KEY and run the quality review before using the cohort analytically."],
-        },
+def dataset_extension(dataset_format: str) -> str:
+    return {"csv": ".csv", "tsv": ".tsv", "json": ".json"}.get(dataset_format, ".data")
+
+
+def retrieve_dataset(dataset: dict[str, Any]) -> dict[str, Any]:
+    dataset_format = dataset.get("format") or "metadata_only"
+    download_url = (dataset.get("download_url") or "").strip()
+    result: dict[str, Any] = {
+        "status": "local_metadata" if dataset_format == "metadata_only" else "not_downloaded",
+        "format": dataset_format,
+        "download_url": download_url,
     }
+    if dataset_format == "metadata_only":
+        return result
+    if dataset_format not in {"csv", "tsv", "json"}:
+        raise ValueError(f"Unsupported dataset format: {dataset_format}.")
+    if not download_url:
+        raise ValueError("The selected external dataset did not include a direct download URL.")
+
+    validate_public_url(download_url)
+    request = urllib.request.Request(
+        download_url,
+        headers={"User-Agent": "DepMap-Dependency-Explorer/1.0"},
+    )
+    opener = urllib.request.build_opener(PublicRedirectHandler())
+    with opener.open(request, timeout=45) as response:
+        content_length = int(response.headers.get("Content-Length") or 0)
+        if content_length > MAX_DATASET_BYTES:
+            raise ValueError(
+                f"Selected dataset is larger than the {MAX_DATASET_BYTES // (1024 * 1024)} MB download limit."
+            )
+        payload = response.read(MAX_DATASET_BYTES + 1)
+        final_url = response.geturl()
+        content_type = response.headers.get("Content-Type", "").split(";", 1)[0]
+
+    if len(payload) > MAX_DATASET_BYTES:
+        raise ValueError(
+            f"Selected dataset is larger than the {MAX_DATASET_BYTES // (1024 * 1024)} MB download limit."
+        )
+    if payload.lstrip().lower().startswith((b"<!doctype html", b"<html")):
+        raise ValueError("The dataset download URL returned a web page instead of a data file.")
+
+    os.makedirs(STRATIFIER_DATASET_DIR, exist_ok=True)
+    digest = hashlib.sha256(payload).hexdigest()
+    path = os.path.join(STRATIFIER_DATASET_DIR, f"{digest}{dataset_extension(dataset_format)}")
+    if not os.path.exists(path):
+        with open(path, "wb") as f:
+            f.write(payload)
+
+    result.update(
+        {
+            "status": "downloaded",
+            "final_url": final_url,
+            "content_type": content_type,
+            "bytes": len(payload),
+            "sha256": digest,
+            "cached_path": path,
+        }
+    )
+    return result
+
+
+def load_external_rows(path: str, dataset_format: str) -> list[dict[str, Any]]:
+    if dataset_format in {"csv", "tsv"}:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f, delimiter="," if dataset_format == "csv" else "\t")
+            rows = []
+            for row in reader:
+                rows.append(dict(row))
+                if len(rows) >= MAX_DATASET_ROWS:
+                    raise ValueError(f"Dataset exceeds the {MAX_DATASET_ROWS:,}-row processing limit.")
+            return rows
+
+    with open(path, encoding="utf-8-sig") as f:
+        payload = json.load(f)
+    if isinstance(payload, list):
+        rows = payload
+    elif isinstance(payload, dict):
+        rows = next(
+            (payload[key] for key in ("data", "records", "rows") if isinstance(payload.get(key), list)),
+            None,
+        )
+    else:
+        rows = None
+    if rows is None or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("JSON dataset must be an array of objects or contain a data, records, or rows array.")
+    if len(rows) > MAX_DATASET_ROWS:
+        raise ValueError(f"Dataset exceeds the {MAX_DATASET_ROWS:,}-row processing limit.")
+    return rows
+
+
+def find_column(rows: list[dict[str, Any]], requested: str, candidates: tuple[str, ...] = ()) -> str:
+    if not rows:
+        raise ValueError("The selected dataset contains no rows.")
+    columns = list(rows[0])
+    by_normalized = {normalized(column): column for column in columns}
+    for candidate in (requested, *candidates):
+        if normalized(candidate) in by_normalized:
+            return by_normalized[normalized(candidate)]
+    raise ValueError(f"Could not find required column '{requested}' in the selected dataset.")
+
+
+def model_identifier_lookup(model_rows: list[dict[str, str]]) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    fields = (
+        "ModelID",
+        "ModelIDAlias",
+        "CCLEName",
+        "CellLineName",
+        "StrippedCellLineName",
+        "RRID",
+        "COSMICID",
+        "SangerModelID",
+    )
+    for row in model_rows:
+        model_id = row["ModelID"]
+        for field in fields:
+            raw = row.get(field) or ""
+            values = raw.replace(";", ",").split(",") if field == "ModelIDAlias" else [raw]
+            for value in values:
+                key = normalized(value)
+                if key:
+                    lookup[key] = model_id
+    return lookup
+
+
+def map_external_dataset(
+    model_rows: list[dict[str, str]], dataset: dict[str, Any], retrieval: dict[str, Any]
+) -> tuple[set[str], set[str], dict[str, Any]]:
+    rows = load_external_rows(retrieval["cached_path"], retrieval["format"])
+    identifier_column = find_column(rows, dataset.get("identifier_column") or "", IDENTIFIER_COLUMNS)
+    group_column = find_column(rows, dataset.get("group_column") or "")
+    positive_values = {normalized(value) for value in dataset.get("positive_values") or [] if normalized(value)}
+    negative_values = {normalized(value) for value in dataset.get("negative_values") or [] if normalized(value)}
+    if not positive_values:
+        raise ValueError("The selected dataset did not define any positive-group values.")
+
+    lookup = model_identifier_lookup(model_rows)
+    positive_ids: set[str] = set()
+    negative_ids: set[str] = set()
+    mapped_rows = 0
+    unmatched_identifiers: set[str] = set()
+    for row in rows:
+        raw_identifier = row.get(identifier_column)
+        model_id = lookup.get(normalized(raw_identifier))
+        if not model_id:
+            if raw_identifier:
+                unmatched_identifiers.add(str(raw_identifier))
+            continue
+        mapped_rows += 1
+        group_value = normalized(row.get(group_column))
+        if group_value in positive_values:
+            positive_ids.add(model_id)
+        if group_value in negative_values:
+            negative_ids.add(model_id)
+
+    if not negative_values:
+        negative_ids = {row["ModelID"] for row in model_rows} - positive_ids
+    negative_ids -= positive_ids
+    mapping = {
+        "status": "mapped",
+        "rows": len(rows),
+        "mapped_rows": mapped_rows,
+        "unmatched_identifier_count": len(unmatched_identifiers),
+        "identifier_column": identifier_column,
+        "group_column": group_column,
+        "positive_models": len(positive_ids),
+        "negative_models": len(negative_ids),
+    }
+    return positive_ids, negative_ids, mapping
+
+
+def response_sources(payload: dict[str, Any]) -> list[dict[str, str]]:
+    sources: dict[str, str] = {}
+    for item in payload.get("output", []):
+        action = item.get("action") or {}
+        for source in action.get("sources") or []:
+            if source.get("url"):
+                sources[source["url"]] = source.get("title") or source["url"]
+        for content in item.get("content") or []:
+            for annotation in content.get("annotations") or []:
+                if annotation.get("type") == "url_citation" and annotation.get("url"):
+                    sources[annotation["url"]] = annotation.get("title") or annotation["url"]
+    return [{"title": title, "url": url} for url, title in sources.items()]
 
 
 def request_openai_spec(prompt: str, taxonomy: dict[str, list[str]]) -> dict[str, Any]:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        return fallback_spec(prompt)
+        raise RuntimeError("OPENAI_API_KEY is not configured on this server.")
 
     schema = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["label", "positive_label", "negative_label", "positive", "negative", "quality"],
+        "required": ["label", "positive_label", "negative_label", "positive", "negative", "dataset", "quality"],
         "properties": {
             "label": {"type": "string"},
             "positive_label": {"type": "string"},
             "negative_label": {"type": "string"},
             "positive": {"$ref": "#/$defs/group"},
             "negative": {"$ref": "#/$defs/group"},
+            "dataset": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "name",
+                    "provider",
+                    "source_url",
+                    "download_url",
+                    "format",
+                    "identifier_column",
+                    "group_column",
+                    "positive_values",
+                    "negative_values",
+                    "why_selected",
+                    "mapping_notes"
+                ],
+                "properties": {
+                    "name": {"type": "string"},
+                    "provider": {"type": "string"},
+                    "source_url": {"type": "string"},
+                    "download_url": {"type": "string"},
+                    "format": {"type": "string", "enum": ["csv", "tsv", "json", "metadata_only"]},
+                    "identifier_column": {"type": "string"},
+                    "group_column": {"type": "string"},
+                    "positive_values": {"type": "array", "items": {"type": "string"}},
+                    "negative_values": {"type": "array", "items": {"type": "string"}},
+                    "why_selected": {"type": "string"},
+                    "mapping_notes": {"type": "string"}
+                }
+            },
             "quality": {
                 "type": "object",
                 "additionalProperties": False,
@@ -299,11 +539,20 @@ def request_openai_spec(prompt: str, taxonomy: dict[str, list[str]]) -> dict[str
             {
                 "role": "system",
                 "content": (
-                    "Convert a plain-English cancer cell-line contrast into strict filters over DepMap "
-                    "Model.csv metadata. Prefer exact Oncotree lineages, diseases, and subtypes from the "
-                    "provided taxonomy. Use include_terms only for aliases not represented exactly. "
-                    "Negative should represent the requested comparator, or all other models by excluding "
-                    "the positive group if the prompt implies one-vs-rest."
+                    "Build a reproducible stratifier for a DepMap dependency analysis. Search the web for "
+                    "the most authoritative, current dataset that defines both sides of the requested cell-line "
+                    "contrast and can be mapped deterministically to DepMap ModelID, CCLEName, cell-line name, "
+                    "Cellosaurus RRID, or COSMIC ID. Prefer primary maintained sources such as DepMap, "
+                    "Cellosaurus, NCI, cBioPortal, COSMIC, or a peer-reviewed data repository. For a downloadable "
+                    "CSV, TSV, or JSON table, provide a direct data-file URL, the exact identifier and grouping "
+                    "columns, and exact positive/negative values. Leave negative_values empty only for a true "
+                    "positive-vs-all-other comparison. Use format metadata_only only when the locally installed "
+                    "DepMap Model.csv taxonomy is itself the best cohort-defining dataset; then provide strict "
+                    "filters over the supplied taxonomy. For external datasets, positive and negative metadata "
+                    "filters should express requested lineage, disease, or subtype restrictions shared with the "
+                    "molecular grouping, not mutation or fusion terms absent from Model.csv. Do not invent URLs, "
+                    "columns, values, identifiers, or "
+                    "dataset capabilities. Critically state weaknesses and validation checks."
                 ),
             },
             {
@@ -311,6 +560,9 @@ def request_openai_spec(prompt: str, taxonomy: dict[str, list[str]]) -> dict[str
                 "content": json.dumps({"prompt": prompt, "available_taxonomy": taxonomy}),
             },
         ],
+        "tools": [{"type": "web_search"}],
+        "tool_choice": "auto",
+        "include": ["web_search_call.action.sources"],
         "text": {"format": {"type": "json_schema", "name": "depmap_stratifier", "schema": schema, "strict": True}},
     }
     req = urllib.request.Request(
@@ -325,7 +577,9 @@ def request_openai_spec(prompt: str, taxonomy: dict[str, list[str]]) -> dict[str
     for item in payload.get("output", []):
         for content in item.get("content", []):
             if content.get("type") in {"output_text", "text"} and content.get("text"):
-                return json.loads(content["text"])
+                spec = json.loads(content["text"])
+                spec["_web_sources"] = response_sources(payload)
+                return spec
     raise RuntimeError("OpenAI returned no structured text.")
 
 
@@ -353,14 +607,44 @@ def model_payload(model_rows: list[dict[str, str]], model_ids: set[str], quality
 def compute_stratifier(prompt: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     model_rows = load_model_rows()
     spec = request_openai_spec(prompt, available_taxonomy(model_rows))
-    positive_ids = choose_models(model_rows, spec["positive"])
-    negative_ids = choose_models(model_rows, spec["negative"])
-    if not negative_ids:
-        negative_ids = {row["ModelID"] for row in model_rows} - positive_ids
+    dataset = spec["dataset"]
+    retrieval = retrieve_dataset(dataset)
+    if retrieval["status"] == "downloaded":
+        positive_ids, negative_ids, mapping = map_external_dataset(model_rows, dataset, retrieval)
+        positive_scope = choose_models(model_rows, spec["positive"])
+        negative_scope = choose_models(model_rows, spec["negative"])
+        if positive_scope:
+            positive_ids &= positive_scope
+        if negative_scope:
+            if dataset.get("negative_values"):
+                negative_ids &= negative_scope
+            else:
+                negative_ids = negative_scope - positive_ids
+        mapping["positive_models"] = len(positive_ids)
+        mapping["negative_models"] = len(negative_ids)
+        mapping["metadata_scope_applied"] = bool(positive_scope or negative_scope)
+        cohort_method = "external_dataset"
+    else:
+        positive_ids = choose_models(model_rows, spec["positive"])
+        negative_ids = choose_models(model_rows, spec["negative"])
+        if not negative_ids:
+            negative_ids = {row["ModelID"] for row in model_rows} - positive_ids
+        negative_ids -= positive_ids
+        mapping = {
+            "status": "local_metadata",
+            "rows": len(model_rows),
+            "mapped_rows": len(model_rows),
+            "identifier_column": "ModelID",
+            "group_column": dataset.get("group_column") or "DepMap model metadata",
+            "positive_models": len(positive_ids),
+            "negative_models": len(negative_ids),
+        }
+        cohort_method = "depmap_metadata"
 
     if len(positive_ids) < 2 or len(negative_ids) < 2:
         raise ValueError(
-            f"Could only match {len(positive_ids)} positive models and {len(negative_ids)} negative models."
+            f"The selected dataset mapped only {len(positive_ids)} positive models and "
+            f"{len(negative_ids)} negative models; at least two are required on each side."
         )
 
     model_to_ccle = {row["ModelID"]: row["CCLEName"] for row in model_rows if row["CCLEName"]}
@@ -376,7 +660,7 @@ def compute_stratifier(prompt: str) -> tuple[dict[str, Any], dict[str, Any], dic
         "label": spec["label"],
         "positive_label": spec["positive_label"],
         "negative_label": spec["negative_label"],
-        "source": f'Plain-English prompt: "{prompt}"',
+        "source": f'{dataset["name"]} ({dataset["provider"]})',
         "positive_models": model_payload(model_rows, positive_ids),
         "negative_models": model_payload(model_rows, negative_ids),
         "datasets": {
@@ -388,6 +672,23 @@ def compute_stratifier(prompt: str) -> tuple[dict[str, Any], dict[str, Any], dic
             "rnai": rnai_included,
         },
     }
-    source = {"prompt": prompt, "spec": spec, "positive_model_ids": sorted(positive_ids), "negative_model_ids": sorted(negative_ids)}
+    retrieval_for_source = dict(retrieval)
+    if retrieval_for_source.get("cached_path"):
+        retrieval_for_source["cached_file"] = os.path.basename(retrieval_for_source.pop("cached_path"))
+    source = {
+        "prompt": prompt,
+        "dataset": dataset,
+        "retrieval": retrieval_for_source,
+        "mapping": mapping,
+        "cohort_method": cohort_method,
+        "web_sources": spec.pop("_web_sources", []),
+        "spec": spec,
+        "positive_model_ids": sorted(positive_ids),
+        "negative_model_ids": sorted(negative_ids),
+    }
     quality = spec["quality"]
+    quality["dataset_summary"] = (
+        f'{dataset["name"]} mapped {mapping["positive_models"]} positive and '
+        f'{mapping["negative_models"]} negative DepMap models.'
+    )
     return analysis, source, quality
