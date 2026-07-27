@@ -24,6 +24,8 @@ from dependency_stratifiers import MODEL_PATH, compute_stratifier
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "app.db"))
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USING_POSTGRES = bool(DATABASE_URL)
 DEPENDENCY_SUMMARY_PATH = os.path.join(BASE_DIR, "static", "data", "hpv_dependency_summary.json")
 UTC = timezone.utc
 MIN_DEPENDENCY_GROUP_VALUES = 3
@@ -47,12 +49,41 @@ def from_iso(value: str) -> datetime:
     return datetime.fromisoformat(value).astimezone(UTC)
 
 
-def get_db() -> sqlite3.Connection:
+def connect_db() -> Any:
+    if USING_POSTGRES:
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError(
+                "DATABASE_URL is set, but PostgreSQL support is not installed. "
+                "Run `pip install -r requirements.txt`."
+            ) from exc
+        return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    return conn
+
+
+def db_execute(db: Any, statement: str, params: tuple[Any, ...] = ()) -> Any:
+    if USING_POSTGRES:
+        statement = statement.replace("?", "%s")
+    return db.execute(statement, params)
+
+
+def insert_row(db: Any, statement: str, params: tuple[Any, ...]) -> int:
+    if USING_POSTGRES:
+        cursor = db_execute(db, f"{statement.rstrip().rstrip(';')} RETURNING id", params)
+        return int(cursor.fetchone()["id"])
+    cursor = db_execute(db, statement, params)
+    return int(cursor.lastrowid)
+
+
+def get_db() -> Any:
     if "db" not in g:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        g.db = conn
+        g.db = connect_db()
     return g.db
 
 
@@ -64,13 +95,12 @@ def close_db(exception: Exception | None) -> None:
 
 
 def init_db() -> None:
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
+    if not USING_POSTGRES:
+        db_dir = os.path.dirname(DB_PATH)
+        if db_dir:
+            os.makedirs(db_dir, exist_ok=True)
 
-    db = sqlite3.connect(DB_PATH)
-    db.execute("PRAGMA foreign_keys = ON")
-    db.executescript(
+    sqlite_schema = (
         """
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,17 +132,65 @@ def init_db() -> None:
             quality_json TEXT NOT NULL,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL
-        );
-        """
+        )
+        """,
     )
+    postgres_schema = (
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            id BIGSERIAL PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            first_name TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('admin', 'forecaster', 'viewer')) DEFAULT 'forecaster',
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id BIGSERIAL PRIMARY KEY,
+            actor_id BIGINT,
+            event_type TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            entity_id BIGINT,
+            payload_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (actor_id) REFERENCES users(id)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS dependency_stratifiers (
+            id BIGSERIAL PRIMARY KEY,
+            label TEXT NOT NULL,
+            prompt TEXT NOT NULL,
+            analysis_json TEXT NOT NULL,
+            source_json TEXT NOT NULL,
+            quality_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """,
+    )
+
+    db = connect_db()
+    for statement in postgres_schema if USING_POSTGRES else sqlite_schema:
+        if USING_POSTGRES:
+            db_execute(db, statement)
+        else:
+            db.executescript(statement)
+    db.commit()
 
     admin_email = os.environ.get("ADMIN_EMAIL")
     admin_password = os.environ.get("ADMIN_PASSWORD")
     admin_name = os.environ.get("ADMIN_FIRST_NAME", "Admin")
 
-    existing_admin = db.execute("SELECT id FROM users WHERE role='admin' AND is_active=1 LIMIT 1").fetchone()
+    existing_admin = db_execute(
+        db, "SELECT id FROM users WHERE role='admin' AND is_active=1 LIMIT 1"
+    ).fetchone()
     if not existing_admin and admin_email and admin_password:
-        db.execute(
+        db_execute(
+            db,
             """
             INSERT INTO users (email, first_name, password_hash, role, is_active, created_at)
             VALUES (?, ?, ?, 'admin', 1, ?)
@@ -126,7 +204,8 @@ def init_db() -> None:
 
 def log_event(actor_id: int | None, event_type: str, entity_type: str, entity_id: int | None, payload: dict[str, Any]) -> None:
     db = get_db()
-    db.execute(
+    db_execute(
+        db,
         """
         INSERT INTO audit_logs (actor_id, event_type, entity_type, entity_id, payload_json, created_at)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -136,12 +215,12 @@ def log_event(actor_id: int | None, event_type: str, entity_type: str, entity_id
     db.commit()
 
 
-def get_user(user_id: int) -> sqlite3.Row | None:
+def get_user(user_id: int) -> Any | None:
     db = get_db()
-    return db.execute("SELECT * FROM users WHERE id=? AND is_active=1", (user_id,)).fetchone()
+    return db_execute(db, "SELECT * FROM users WHERE id=? AND is_active=1", (user_id,)).fetchone()
 
 
-def current_user() -> sqlite3.Row | None:
+def current_user() -> Any | None:
     uid = session.get("user_id")
     if not uid:
         return None
@@ -178,17 +257,18 @@ def load_builtin_dependency_summary() -> dict[str, Any]:
         return json.load(f)
 
 
-def fetch_custom_stratifiers() -> list[sqlite3.Row]:
-    return get_db().execute(
+def fetch_custom_stratifiers() -> list[Any]:
+    return db_execute(
+        get_db(),
         """
         SELECT *
         FROM dependency_stratifiers
-        ORDER BY datetime(updated_at) DESC
+        ORDER BY updated_at DESC
         """
     ).fetchall()
 
 
-def custom_stratifier_analysis(row: sqlite3.Row) -> dict[str, Any]:
+def custom_stratifier_analysis(row: Any) -> dict[str, Any]:
     analysis = json.loads(row["analysis_json"])
     analysis["id"] = f"custom-{row['id']}"
     analysis["label"] = f"{analysis['label']} *"
@@ -316,12 +396,13 @@ def register():
             return render_template("register.html")
 
         db = get_db()
-        exists = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+        exists = db_execute(db, "SELECT id FROM users WHERE email=?", (email,)).fetchone()
         if exists:
             flash("Email is already registered.", "error")
             return render_template("register.html")
 
-        db.execute(
+        db_execute(
+            db,
             """
             INSERT INTO users (email, first_name, password_hash, role, is_active, created_at)
             VALUES (?, ?, ?, 'forecaster', 1, ?)
@@ -342,7 +423,9 @@ def login():
         password = request.form.get("password", "")
 
         db = get_db()
-        user = db.execute("SELECT * FROM users WHERE email=? AND is_active=1", (email,)).fetchone()
+        user = db_execute(
+            db, "SELECT * FROM users WHERE email=? AND is_active=1", (email,)
+        ).fetchone()
 
         if not user or not check_password_hash(user["password_hash"], password):
             flash("Invalid credentials.", "error")
@@ -400,12 +483,13 @@ def admin_users():
                 flash("User create failed. Check first name, email, and password length (>=8).", "error")
                 return redirect(url_for("admin_users"))
 
-            exists = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
+            exists = db_execute(db, "SELECT id FROM users WHERE email=?", (email,)).fetchone()
             if exists:
                 flash("Email already exists.", "error")
                 return redirect(url_for("admin_users"))
 
-            cur = db.execute(
+            created_user_id = insert_row(
+                db,
                 """
                 INSERT INTO users (email, first_name, password_hash, role, is_active, created_at)
                 VALUES (?, ?, ?, ?, 1, ?)
@@ -413,7 +497,7 @@ def admin_users():
                 (email, first_name, generate_password_hash(password), role, to_iso(now_utc())),
             )
             db.commit()
-            log_event(current_user()["id"], "user_created", "user", cur.lastrowid, {"role": role})
+            log_event(current_user()["id"], "user_created", "user", created_user_id, {"role": role})
             flash("User created.", "success")
 
         elif action == "toggle_active":
@@ -424,7 +508,7 @@ def admin_users():
                 flash("Invalid user id.", "error")
                 return redirect(url_for("admin_users"))
 
-            target = db.execute("SELECT * FROM users WHERE id=?", (target_id,)).fetchone()
+            target = db_execute(db, "SELECT * FROM users WHERE id=?", (target_id,)).fetchone()
             if not target:
                 flash("User not found.", "error")
                 return redirect(url_for("admin_users"))
@@ -434,14 +518,15 @@ def admin_users():
                 return redirect(url_for("admin_users"))
 
             new_state = 0 if target["is_active"] else 1
-            db.execute("UPDATE users SET is_active=? WHERE id=?", (new_state, target_id))
+            db_execute(db, "UPDATE users SET is_active=? WHERE id=?", (new_state, target_id))
             db.commit()
             log_event(current_user()["id"], "user_toggled", "user", target_id, {"is_active": new_state})
             flash("User updated.", "success")
 
         return redirect(url_for("admin_users"))
 
-    users = db.execute(
+    users = db_execute(
+        db,
         "SELECT id, first_name, email, role, is_active, created_at FROM users ORDER BY created_at DESC"
     ).fetchall()
     return render_template("admin_users.html", users=users)
@@ -511,7 +596,8 @@ def create_stratifier():
 
     db = get_db()
     now = to_iso(now_utc())
-    db.execute(
+    db_execute(
+        db,
         """
         INSERT INTO dependency_stratifiers
             (label, prompt, analysis_json, source_json, quality_json, created_at, updated_at)
@@ -537,7 +623,7 @@ def create_stratifier():
 @roles_required("admin")
 def delete_stratifier(stratifier_id: int):
     db = get_db()
-    db.execute("DELETE FROM dependency_stratifiers WHERE id=?", (stratifier_id,))
+    db_execute(db, "DELETE FROM dependency_stratifiers WHERE id=?", (stratifier_id,))
     db.commit()
     flash("Stratifier deleted.", "success")
     return redirect(url_for("manage_stratifiers"))
