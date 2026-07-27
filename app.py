@@ -34,6 +34,7 @@ MIN_DEPENDENCY_GROUP_COVERAGE = 0.5
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+app.config["AUTH_ENABLED"] = os.environ.get("AUTH_ENABLED", "false").lower() == "true"
 app.config["ALLOW_SELF_SIGNUP"] = os.environ.get("ALLOW_SELF_SIGNUP", "true").lower() == "true"
 
 
@@ -230,6 +231,8 @@ def current_user() -> Any | None:
 def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
+        if not app.config["AUTH_ENABLED"]:
+            return fn(*args, **kwargs)
         if not current_user():
             return redirect(url_for("login"))
         return fn(*args, **kwargs)
@@ -241,6 +244,8 @@ def roles_required(*roles: str):
     def decorator(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
+            if not app.config["AUTH_ENABLED"]:
+                return fn(*args, **kwargs)
             user = current_user()
             if not user or user["role"] not in roles:
                 flash("You do not have permission to access this page.", "error")
@@ -353,12 +358,16 @@ def quality_status(analysis: dict[str, Any], quality: dict[str, Any]) -> str:
 
 @app.before_request
 def hydrate_user() -> None:
-    g.user = current_user()
+    g.user = current_user() if app.config["AUTH_ENABLED"] else None
 
 
 @app.context_processor
 def inject_globals() -> dict[str, Any]:
-    return {"current_user": g.get("user"), "now_utc": now_utc()}
+    return {
+        "auth_enabled": app.config["AUTH_ENABLED"],
+        "current_user": g.get("user"),
+        "now_utc": now_utc(),
+    }
 
 
 @app.template_filter("dt")
@@ -371,13 +380,16 @@ def format_dt(value: str) -> str:
 
 @app.route("/")
 def home():
-    if not current_user():
+    if app.config["AUTH_ENABLED"] and not current_user():
         return redirect(url_for("login"))
     return redirect(url_for("dashboard"))
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    if not app.config["AUTH_ENABLED"]:
+        return redirect(url_for("dashboard"))
+
     if not app.config["ALLOW_SELF_SIGNUP"]:
         flash("Self-signup is disabled. Ask your admin to create your account.", "error")
         return redirect(url_for("login"))
@@ -418,6 +430,9 @@ def register():
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    if not app.config["AUTH_ENABLED"]:
+        return redirect(url_for("dashboard"))
+
     if request.method == "POST":
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
@@ -442,7 +457,7 @@ def login():
 @login_required
 def logout():
     session.clear()
-    return redirect(url_for("login"))
+    return redirect(url_for("login") if app.config["AUTH_ENABLED"] else url_for("dashboard"))
 
 
 @app.route("/dashboard")
@@ -466,6 +481,9 @@ def legacy_depmap_redirect(bet_id=None):
 @login_required
 @roles_required("admin")
 def admin_users():
+    if not app.config["AUTH_ENABLED"]:
+        return redirect(url_for("dashboard"))
+
     db = get_db()
 
     if request.method == "POST":

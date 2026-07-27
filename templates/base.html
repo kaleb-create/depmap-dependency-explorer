@@ -12,15 +12,15 @@
     <div class="bg-shape bg-shape-b"></div>
     <header class="topbar">
       <a class="brand" href="{{ url_for('dashboard') }}">DepMap Explorer</a>
-      {% if current_user %}
       <nav>
         <a href="{{ url_for('dashboard') }}">Dashboard</a>
         <a href="{{ url_for('hpv_dependencies') }}">Dependencies</a>
         <a href="{{ url_for('manage_stratifiers') }}">Stratifiers</a>
-        {% if current_user['role'] == 'admin' %}
+        {% if auth_enabled and current_user and current_user['role'] == 'admin' %}
         <a href="{{ url_for('admin_users') }}">Users</a>
         {% endif %}
       </nav>
+      {% if auth_enabled and current_user %}
       <div class="identity">
         <span>{{ current_user['first_name'] }} ({{ current_user['role'] }})</span>
         <form method="post" action="{{ url_for('logout') }}">

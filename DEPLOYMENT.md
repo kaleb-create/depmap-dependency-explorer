@@ -18,6 +18,7 @@ Minimum environment:
 SECRET_KEY=<long random value>
 OPENAI_API_KEY=<OpenAI API key>
 OPENAI_MODEL=gpt-5.5
+AUTH_ENABLED=false
 ALLOW_SELF_SIGNUP=false
 ADMIN_EMAIL=<initial admin email>
 ADMIN_PASSWORD=<initial admin password>
@@ -29,6 +30,9 @@ STRATIFIER_DATASET_DIR=/var/data/stratifier_sources
 MAX_STRATIFIER_DATASET_BYTES=26214400
 MAX_STRATIFIER_DATASET_ROWS=250000
 ```
+
+`AUTH_ENABLED=false` runs the explorer without login or registration. Set it to
+`true` later to restore session-based access control and user administration.
 
 For hosted deployments, `DATABASE_URL` is the preferred account and stratifier
 store. Render can populate it from a linked Postgres database. When

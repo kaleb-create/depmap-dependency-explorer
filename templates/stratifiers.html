@@ -43,7 +43,7 @@
             <h2>{{ stratifier.label }}</h2>
             <p class="muted">{{ stratifier.prompt }}</p>
           </div>
-          {% if current_user['role'] == 'admin' %}
+          {% if not auth_enabled or (current_user and current_user['role'] == 'admin') %}
             <form method="post" action="{{ url_for('delete_stratifier', stratifier_id=stratifier.id) }}">
               <button class="btn-danger" type="submit">Delete</button>
             </form>
