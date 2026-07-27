@@ -1,9 +1,10 @@
+import csv
 import json
 import math
 import os
 import sqlite3
 from datetime import datetime, timezone
-from functools import wraps
+from functools import lru_cache, wraps
 from typing import Any
 
 from flask import (
@@ -18,7 +19,7 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from dependency_stratifiers import compute_stratifier
+from dependency_stratifiers import MODEL_PATH, compute_stratifier
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -191,6 +192,7 @@ def custom_stratifier_analysis(row: sqlite3.Row) -> dict[str, Any]:
     analysis = json.loads(row["analysis_json"])
     analysis["id"] = f"custom-{row['id']}"
     analysis["label"] = f"{analysis['label']} *"
+    analysis["category"] = "Custom stratifiers"
     analysis["custom_id"] = row["id"]
     filter_low_coverage_rows(analysis)
     return analysis
@@ -230,9 +232,31 @@ def min_dependency_values(group_size: int) -> int:
     )
 
 
+@lru_cache(maxsize=1)
+def depmap_cancer_model_count() -> int:
+    if not os.path.exists(MODEL_PATH):
+        return 0
+    with open(MODEL_PATH, newline="") as handle:
+        return sum(1 for _ in csv.DictReader(handle))
+
+
+def add_stratifier_prevalence(analysis: dict[str, Any]) -> None:
+    positive_count = len(analysis.get("positive_models", []))
+    total_count = int(analysis.get("prevalence_total") or depmap_cancer_model_count())
+    analysis["stratifier_prevalence"] = {
+        "positive": positive_count,
+        "total": total_count,
+        "frequency": positive_count / total_count if total_count else 0,
+        "denominator": analysis.get("prevalence_denominator")
+        or ("all DepMap cancer models" if total_count else "positive cohort only"),
+    }
+
+
 def build_dependency_summary() -> dict[str, Any]:
     summary = load_builtin_dependency_summary()
     summary["analyses"].extend(custom_stratifier_analysis(row) for row in fetch_custom_stratifiers())
+    for analysis in summary["analyses"]:
+        add_stratifier_prevalence(analysis)
     return summary
 
 

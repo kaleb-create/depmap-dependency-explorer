@@ -6,7 +6,7 @@
 <section class="hero hpv-hero">
   <div>
     <h1>Differential Dependencies</h1>
-    <p class="muted">Positive-group average dependency minus negative-group average dependency for each DepMap gene.</p>
+    <p class="muted">Compare absolute dependency in the positive cohort with differential dependency between cohorts.</p>
   </div>
   <div class="explorer-actions">
     <a class="btn-primary btn-ghost" href="{{ url_for('manage_stratifiers') }}">Manage stratifiers</a>
@@ -20,6 +20,24 @@
   <label for="gene-search">Gene search
     <input id="gene-search" type="search" placeholder="Search TP53, E6AP, MYC..." autocomplete="off" />
   </label>
+  <fieldset class="cutoff-control">
+    <label for="negative-display-mode">Negative cohort display
+      <select id="negative-display-mode">
+        <option value="cutoff">Screen by essentiality cutoff</option>
+        <option value="color">Color by absolute dependency</option>
+      </select>
+    </label>
+    <div id="cutoff-settings">
+      <label for="negative-cutoff">Negative cohort cutoff
+        <span class="range-row">
+          <input id="negative-cutoff" type="range" min="-1.5" max="0.5" step="0.05" value="-0.5" />
+          <output id="negative-cutoff-value">-0.50</output>
+        </span>
+      </label>
+      <span class="small-line">Shown genes have negative-cohort dependency above this threshold. More-negative scores indicate greater essentiality.</span>
+    </div>
+    <span id="negative-color-help" class="small-line hidden">All genes are shown. Green is near-zero or positive negative-cohort dependency; red is strongly negative dependency.</span>
+  </fieldset>
 </section>
 
 <section class="hpv-meta panel" id="hpv-meta">
@@ -28,12 +46,14 @@
   </div>
 </section>
 
+<section class="panel stratifier-prevalence-panel" id="stratifier-prevalence-panel" aria-live="polite"></section>
+
 <section class="dependency-grid">
   <article class="dependency-panel">
     <div class="dependency-head">
       <div>
         <h2>CRISPR</h2>
-        <p class="small-line" id="crispr-subtitle">Loading...</p>
+      <p class="small-line" id="crispr-subtitle">Loading...</p>
       </div>
       <output id="crispr-count" class="chart-count"></output>
     </div>
@@ -44,7 +64,7 @@
     <div class="dependency-head">
       <div>
         <h2>siRNA</h2>
-        <p class="small-line" id="rnai-subtitle">Loading...</p>
+      <p class="small-line" id="rnai-subtitle">Loading...</p>
       </div>
       <output id="rnai-count" class="chart-count"></output>
     </div>
@@ -56,7 +76,7 @@
   <div class="dependency-head">
     <div>
       <h2>Matched Genes</h2>
-      <p class="small-line">Search results show differential scores and the underlying group averages.</p>
+      <p class="small-line">Search results show the absolute positive-cohort score, differential score, and both group averages.</p>
     </div>
   </div>
   <div class="table-scroll">
@@ -64,8 +84,10 @@
       <thead>
         <tr>
           <th>Gene</th>
+          <th>CRISPR positive</th>
           <th>CRISPR diff</th>
           <th>CRISPR group avgs</th>
+          <th>siRNA positive</th>
           <th>siRNA diff</th>
           <th>siRNA group avgs</th>
         </tr>

@@ -20,20 +20,19 @@ CELLOSAURUS_SEARCH_URL = "https://api.cellosaurus.org/search/cell-line"
 CRISPR_RELEASE = "DepMap Public 26Q1"
 RNAI_RELEASE = "DEMETER2 Data v6"
 HPV_TRANSFORMANT_QUERY = "transformant:papillomavirus"
+MTAP_COPY_NUMBER_URL = "https://ndownloader.figshare.com/files/34008428"
+MTAP_COPY_NUMBER_FILENAME = "CCLE_gene_cn_22Q1.csv"
+MTAP_DELETION_THRESHOLD = 0.4
+TOP_DRIVER_COUNT = 20
 MIN_GROUP_VALUES = 3
 MIN_GROUP_COVERAGE = 0.5
 
-MUTATION_ANALYSES = [
-    ("kras", "KRAS mutant vs non-mutant", ["KRAS"]),
+ADDITIONAL_MUTATION_ANALYSES = [
     ("egfr", "EGFR mutant vs non-mutant", ["EGFR"]),
     ("pi3k", "PI3K mutant vs non-mutant", ["PIK3CA", "PIK3R1"]),
-    ("braf", "BRAF mutant vs non-mutant", ["BRAF"]),
-    ("nras", "NRAS mutant vs non-mutant", ["NRAS"]),
     ("hras", "HRAS mutant vs non-mutant", ["HRAS"]),
-    ("tp53", "TP53 mutant vs non-mutant", ["TP53"]),
-    ("pten", "PTEN mutant vs non-mutant", ["PTEN"]),
-    ("apc", "APC mutant vs non-mutant", ["APC"]),
     ("ctnnb1", "CTNNB1 mutant vs non-mutant", ["CTNNB1"]),
+    ("brca", "BRCA1/2 mutant vs non-mutant", ["BRCA1", "BRCA2"]),
 ]
 
 
@@ -129,31 +128,58 @@ def is_driver_mutation(row: dict[str, str]) -> bool:
     return (
         row.get("IsDefaultEntryForModel") == "Yes"
         and (
-            row.get("VepImpact") in {"HIGH", "MODERATE"}
-            or row.get("Hotspot") == "True"
-            or row.get("HessDriver") == "True"
+            row.get("Hotspot") == "True"
+            or row.get("HessDriver") in {"True", "Y"}
             or row.get("OncogeneHighImpact") == "True"
             or row.get("TumorSuppressorHighImpact") == "True"
-            or row.get("LikelyLoF") == "True"
         )
     )
 
 
-def mutation_groups(mutation_path: str) -> dict[str, set[str]]:
-    by_gene = {gene: set() for _, _, genes in MUTATION_ANALYSES for gene in genes}
-    by_gene["ALK"] = set()
+def mutation_groups(mutation_path: str) -> tuple[dict[str, set[str]], list[str]]:
+    by_gene: dict[str, set[str]] = {}
     with open(mutation_path, newline="") as f:
         for row in csv.DictReader(f):
             gene = row.get("HugoSymbol")
-            if gene not in by_gene or not is_driver_mutation(row):
+            if not gene or not is_driver_mutation(row):
                 continue
-            by_gene[gene].add(row["ModelID"])
+            by_gene.setdefault(gene, set()).add(row["ModelID"])
+    top_driver_genes = [
+        gene
+        for gene, _ in sorted(
+            by_gene.items(),
+            key=lambda item: (-len(item[1]), item[0]),
+        )[:TOP_DRIVER_COUNT]
+    ]
     groups = {
-        key: set().union(*(by_gene[gene] for gene in genes))
-        for key, _, genes in MUTATION_ANALYSES
+        key: set().union(*(by_gene.get(gene, set()) for gene in genes))
+        for key, _, genes in ADDITIONAL_MUTATION_ANALYSES
     }
-    groups["alk"] = by_gene["ALK"]
-    return groups
+    groups.update({gene.lower(): by_gene[gene] for gene in top_driver_genes})
+    groups["alk"] = by_gene.get("ALK", set())
+    return groups, top_driver_genes
+
+
+def copy_number_deletion_group(copy_number_path: str, gene: str, threshold: float) -> tuple[set[str], set[str]]:
+    deleted: set[str] = set()
+    measured: set[str] = set()
+    with open(copy_number_path, newline="") as f:
+        reader = csv.reader(f)
+        header = next(reader)
+        gene_index = next(
+            (i for i, label in enumerate(header) if parse_gene(label)[0] == gene),
+            None,
+        )
+        if gene_index is None:
+            raise RuntimeError(f"Missing {gene} in {os.path.basename(copy_number_path)}")
+        for row in reader:
+            if gene_index >= len(row) or row[gene_index] in {"", "NA"}:
+                continue
+            model_id = row[0]
+            measured.add(model_id)
+            if float(row[gene_index]) < threshold:
+                deleted.add(model_id)
+    return deleted, measured
 
 
 def fusion_groups(fusion_path: str) -> dict[str, set[str]]:
@@ -179,27 +205,37 @@ def fusion_groups(fusion_path: str) -> dict[str, set[str]]:
     return groups
 
 
-def row_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
+def row_differentials(
+    matrix_path: str,
+    analyses: dict[str, set[str]],
+    eligible_models: dict[str, set[str]] | None = None,
+) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
+    eligible_models = eligible_models or {}
     sums = {key: None for key in analyses}
     counts = {key: None for key in analyses}
-    neg_sums = {key: None for key in analyses}
-    neg_counts = {key: None for key in analyses}
     positive_rows = {key: [] for key in analyses}
-    negative_counts_by_analysis = {key: 0 for key in analyses}
+    eligible_sums = {key: None for key in eligible_models}
+    eligible_counts = {key: None for key in eligible_models}
+    eligible_rows = {key: 0 for key in eligible_models}
 
     with open(matrix_path, newline="") as f:
         reader = csv.reader(f)
         header = next(reader)
         labels = header[1:]
+        total_sums = [0.0] * len(labels)
+        total_counts = [0] * len(labels)
+        total_rows = 0
         for key in analyses:
             sums[key] = [0.0] * len(labels)
             counts[key] = [0] * len(labels)
-            neg_sums[key] = [0.0] * len(labels)
-            neg_counts[key] = [0] * len(labels)
+        for key in eligible_models:
+            eligible_sums[key] = [0.0] * len(labels)
+            eligible_counts[key] = [0] * len(labels)
 
         for row in reader:
             if not row:
                 continue
+            total_rows += 1
             model_id = row[0]
             parsed = []
             for value in row[1:]:
@@ -211,32 +247,47 @@ def row_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tuple[
                     except ValueError:
                         parsed.append(None)
 
+            for i, value in enumerate(parsed):
+                if value is None:
+                    continue
+                total_sums[i] += value
+                total_counts[i] += 1
+
             for key, positives in analyses.items():
-                is_positive = model_id in positives
-                if is_positive:
-                    positive_rows[key].append(model_id)
-                else:
-                    negative_counts_by_analysis[key] += 1
-                target_sums = sums[key] if is_positive else neg_sums[key]
-                target_counts = counts[key] if is_positive else neg_counts[key]
+                if key in eligible_models:
+                    if model_id not in eligible_models[key]:
+                        continue
+                    eligible_rows[key] += 1
+                    for i, value in enumerate(parsed):
+                        if value is None:
+                            continue
+                        eligible_sums[key][i] += value
+                        eligible_counts[key][i] += 1
+                if model_id not in positives:
+                    continue
+                positive_rows[key].append(model_id)
                 for i, value in enumerate(parsed):
                     if value is None:
                         continue
-                    target_sums[i] += value
-                    target_counts[i] += 1
+                    sums[key][i] += value
+                    counts[key][i] += 1
 
     datasets: dict[str, list[dict[str, object]]] = {}
     for key in analyses:
         rows = []
+        analysis_row_count = eligible_rows[key] if key in eligible_models else total_rows
+        analysis_sums = eligible_sums[key] if key in eligible_models else total_sums
+        analysis_counts = eligible_counts[key] if key in eligible_models else total_counts
+        negative_row_count = analysis_row_count - len(positive_rows[key])
         min_positive_n = min_values_for_group(len(positive_rows[key]))
-        min_negative_n = min_values_for_group(negative_counts_by_analysis[key])
+        min_negative_n = min_values_for_group(negative_row_count)
         for i, label in enumerate(labels):
             pos_n = counts[key][i]
-            neg_n = neg_counts[key][i]
+            neg_n = analysis_counts[i] - pos_n
             if pos_n < min_positive_n or neg_n < min_negative_n:
                 continue
             positive_average = sums[key][i] / pos_n
-            negative_average = neg_sums[key][i] / neg_n
+            negative_average = (analysis_sums[i] - sums[key][i]) / neg_n
             gene, entrez = parse_gene(label)
             rows.append(
                 {
@@ -256,16 +307,23 @@ def row_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tuple[
     included = {
         key: {
             "positive": sorted(positive_rows[key]),
-            "negative_n": negative_counts_by_analysis[key],
+            "negative_n": (eligible_rows[key] if key in eligible_models else total_rows) - len(positive_rows[key]),
             "min_positive_n": min_values_for_group(len(positive_rows[key])),
-            "min_negative_n": min_values_for_group(negative_counts_by_analysis[key]),
+            "min_negative_n": min_values_for_group(
+                (eligible_rows[key] if key in eligible_models else total_rows) - len(positive_rows[key])
+            ),
         }
         for key in analyses
     }
     return datasets, included
 
 
-def column_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
+def column_differentials(
+    matrix_path: str,
+    analyses: dict[str, set[str]],
+    eligible_models: dict[str, set[str]] | None = None,
+) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
+    eligible_models = eligible_models or {}
     datasets: dict[str, list[dict[str, object]]] = {key: [] for key in analyses}
     included: dict[str, dict[str, object]] = {}
 
@@ -279,6 +337,8 @@ def column_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tup
             neg_indexes = []
             pos_columns = []
             for i, column in enumerate(header[1:], start=1):
+                if key in eligible_models and column not in eligible_models[key]:
+                    continue
                 if column in positives:
                     pos_indexes.append(i)
                     pos_columns.append(column)
@@ -295,14 +355,24 @@ def column_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tup
 
         for row in reader:
             gene, entrez = parse_gene(row[0])
+            all_values = values_at(row, range(1, len(row)))
+            all_sum = sum(all_values)
+            all_count = len(all_values)
             for key, (pos_indexes, neg_indexes, _) in indexes.items():
                 positive_values = values_at(row, pos_indexes)
-                negative_values = values_at(row, neg_indexes)
+                if key in eligible_models:
+                    negative_values = values_at(row, neg_indexes)
+                    negative_sum = sum(negative_values)
+                    negative_count = len(negative_values)
+                else:
+                    positive_sum = sum(positive_values)
+                    negative_sum = all_sum - positive_sum
+                    negative_count = all_count - len(positive_values)
                 min_positive_n, min_negative_n = minimums[key]
-                if len(positive_values) < min_positive_n or len(negative_values) < min_negative_n:
+                if len(positive_values) < min_positive_n or negative_count < min_negative_n:
                     continue
                 positive_average = sum(positive_values) / len(positive_values)
-                negative_average = sum(negative_values) / len(negative_values)
+                negative_average = negative_sum / negative_count
                 datasets[key].append(
                     {
                         "gene": gene,
@@ -312,7 +382,7 @@ def column_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tup
                         "positive_average": round(positive_average, 6),
                         "negative_average": round(negative_average, 6),
                         "positive_n": len(positive_values),
-                        "negative_n": len(negative_values),
+                        "negative_n": negative_count,
                     }
                 )
 
@@ -321,7 +391,7 @@ def column_differentials(matrix_path: str, analyses: dict[str, set[str]]) -> tup
     return datasets, included
 
 
-def values_at(row: list[str], indexes: list[int]) -> list[float]:
+def values_at(row: list[str], indexes) -> list[float]:
     values = []
     for i in indexes:
         if i >= len(row):
@@ -392,6 +462,8 @@ def main() -> None:
         local_path = os.path.join(DATA_DIR, meta["filename"])
         download(meta["url"], local_path)
         local_paths[key] = local_path
+    local_paths["copy_number_22q1"] = os.path.join(DATA_DIR, MTAP_COPY_NUMBER_FILENAME)
+    download(MTAP_COPY_NUMBER_URL, local_paths["copy_number_22q1"])
 
     model_info = model_lookup(local_paths["model"])
     hpv_transformants = fetch_hpv_transformants()
@@ -406,12 +478,18 @@ def main() -> None:
         if info["cellosaurus"] in hpv_transformants
     }
 
-    mutation_sets = mutation_groups(local_paths["mutations"])
+    mutation_sets, top_driver_genes = mutation_groups(local_paths["mutations"])
     fusion_sets = fusion_groups(local_paths["fusions"])
     mutation_sets["bcr_abl"] = fusion_sets["bcr_abl"]
     mutation_sets["alk"] = mutation_sets["alk"] | fusion_sets["alk"]
     mutation_sets["ret_fusion"] = fusion_sets["ret_fusion"]
     mutation_sets["ros1_fusion"] = fusion_sets["ros1_fusion"]
+    mtap_deleted, mtap_measured = copy_number_deletion_group(
+        local_paths["copy_number_22q1"],
+        "MTAP",
+        MTAP_DELETION_THRESHOLD,
+    )
+    mutation_sets["mtap_del"] = mtap_deleted
 
     analysis_defs = [
         {
@@ -420,6 +498,7 @@ def main() -> None:
             "positive_label": "HPV+",
             "negative_label": "HPV-",
             "source": "Cellosaurus transformant-list",
+            "category": "Featured analyses",
             "positive_model_ids": hpv_models,
             "positive_models": analysis_models(model_info, hpv_models, hpv_extra),
         },
@@ -429,6 +508,7 @@ def main() -> None:
             "positive_label": "BCR-ABL fusion",
             "negative_label": "BCR-ABL fusion-negative",
             "source": "DepMap OmicsFusionFiltered.csv",
+            "category": "Featured analyses",
             "positive_model_ids": mutation_sets["bcr_abl"],
             "positive_models": analysis_models(model_info, mutation_sets["bcr_abl"]),
         },
@@ -438,18 +518,47 @@ def main() -> None:
             "positive_label": "ALK altered",
             "negative_label": "ALK unaltered",
             "source": "ALK mutations plus ALK fusions",
+            "category": "Featured analyses",
             "positive_model_ids": mutation_sets["alk"],
             "positive_models": analysis_models(model_info, mutation_sets["alk"]),
         },
+        {
+            "id": "mtap_del",
+            "label": "MTAP deleted vs intact",
+            "positive_label": "MTAP deleted",
+            "negative_label": "MTAP intact",
+            "source": "DepMap Public 22Q1 CCLE_gene_cn.csv; MTAP linear copy number < 0.4",
+            "category": "Featured analyses",
+            "prevalence_total": len(mtap_measured & set(model_info)),
+            "prevalence_denominator": "DepMap Public 22Q1 models with MTAP copy-number data",
+            "positive_model_ids": mutation_sets["mtap_del"],
+            "positive_models": analysis_models(model_info, mutation_sets["mtap_del"]),
+        },
     ]
-    for key, label, genes in MUTATION_ANALYSES:
+    for rank, gene in enumerate(top_driver_genes, start=1):
+        key = gene.lower()
+        analysis_defs.append(
+            {
+                "id": key,
+                "label": f"{gene} mutant vs non-mutant",
+                "positive_label": f"{gene} mutant",
+                "negative_label": f"{gene} non-mutant",
+                "source": "DepMap OmicsSomaticMutations.csv explicit driver annotations",
+                "category": "Top 20 mutations by prevalence",
+                "prevalence_rank": rank,
+                "positive_model_ids": mutation_sets[key],
+                "positive_models": analysis_models(model_info, mutation_sets[key]),
+            }
+        )
+    for key, label, genes in ADDITIONAL_MUTATION_ANALYSES:
         analysis_defs.append(
             {
                 "id": key,
                 "label": label,
                 "positive_label": f"{'/'.join(genes)} mutant",
                 "negative_label": f"{'/'.join(genes)} non-mutant",
-                "source": "DepMap OmicsSomaticMutations.csv protein-altering/driver variants",
+                "source": "DepMap OmicsSomaticMutations.csv explicit driver annotations",
+                "category": "Additional key stratifiers",
                 "positive_model_ids": mutation_sets[key],
                 "positive_models": analysis_models(model_info, mutation_sets[key]),
             }
@@ -462,6 +571,7 @@ def main() -> None:
                 "positive_label": label.split(" vs ")[0],
                 "negative_label": label.split(" vs ")[1],
                 "source": "DepMap OmicsFusionFiltered.csv",
+                "category": "Additional key stratifiers",
                 "positive_model_ids": mutation_sets[key],
                 "positive_models": analysis_models(model_info, mutation_sets[key]),
             }
@@ -473,9 +583,13 @@ def main() -> None:
         d["id"]: {model_to_ccle[m] for m in d["positive_model_ids"] if m in model_to_ccle}
         for d in analysis_defs
     }
+    crispr_eligible = {"mtap_del": mtap_measured}
+    rnai_eligible = {
+        "mtap_del": {model_to_ccle[m] for m in mtap_measured if m in model_to_ccle}
+    }
 
-    crispr, crispr_included = row_differentials(local_paths["crispr"], crispr_groups)
-    rnai, rnai_included = column_differentials(local_paths["rnai"], rnai_groups)
+    crispr, crispr_included = row_differentials(local_paths["crispr"], crispr_groups, crispr_eligible)
+    rnai, rnai_included = column_differentials(local_paths["rnai"], rnai_groups, rnai_eligible)
 
     analyses = []
     for definition in analysis_defs:
@@ -487,7 +601,21 @@ def main() -> None:
                 "positive_label": definition["positive_label"],
                 "negative_label": definition["negative_label"],
                 "source": definition["source"],
+                "category": definition["category"],
                 "positive_models": definition["positive_models"],
+                **(
+                    {"prevalence_rank": definition["prevalence_rank"]}
+                    if definition.get("prevalence_rank")
+                    else {}
+                ),
+                **(
+                    {
+                        "prevalence_total": definition["prevalence_total"],
+                        "prevalence_denominator": definition["prevalence_denominator"],
+                    }
+                    if definition.get("prevalence_total")
+                    else {}
+                ),
                 "datasets": {
                     "crispr": compact_rows(crispr[analysis_id]),
                     "rnai": compact_rows(rnai[analysis_id]),

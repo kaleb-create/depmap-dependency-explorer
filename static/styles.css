@@ -355,10 +355,84 @@ input[type='range'] {
 
 .explorer-controls {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr);
+  grid-template-columns: minmax(190px, 0.85fr) minmax(190px, 0.85fr) minmax(280px, 1.3fr);
   gap: 10px 12px;
   width: 100%;
   margin-bottom: 16px;
+}
+
+.cutoff-control {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+#cutoff-settings {
+  display: grid;
+  gap: 8px;
+}
+
+#cutoff-settings.hidden {
+  display: none;
+}
+
+.stratifier-prevalence-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.stratifier-prevalence-panel h2 {
+  margin-bottom: 4px;
+  font-size: 20px;
+}
+
+.prevalence-stat {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.prevalence-stat strong {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.prevalence-stat span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.range-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px;
+  align-items: center;
+  gap: 10px;
+}
+
+.range-row input[type='range'] {
+  accent-color: var(--brand-strong);
+}
+
+.range-row output {
+  border: 1px solid #cfc7a8;
+  border-radius: 6px;
+  padding: 6px 7px;
+  background: #fff;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.range-row output.is-disabled {
+  color: var(--muted);
+  background: #f2f0e9;
 }
 
 .explorer-actions {
@@ -706,6 +780,15 @@ input[type='range'] {
   .quality-grid,
   .dataset-provenance {
     grid-template-columns: 1fr;
+  }
+
+  .stratifier-prevalence-panel {
+    display: grid;
+    gap: 12px;
+  }
+
+  .prevalence-stat {
+    justify-items: start;
   }
 
   .model-details ul {

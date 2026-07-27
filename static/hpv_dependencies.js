@@ -19,13 +19,20 @@ const charts = {
 
 const analysisSelect = document.getElementById("analysis-select");
 const searchInput = document.getElementById("gene-search");
+const negativeDisplayMode = document.getElementById("negative-display-mode");
+const cutoffInput = document.getElementById("negative-cutoff");
+const cutoffValue = document.getElementById("negative-cutoff-value");
+const cutoffSettings = document.getElementById("cutoff-settings");
+const negativeColorHelp = document.getElementById("negative-color-help");
 const resultBody = document.querySelector("#gene-results tbody");
 const metaPanel = document.getElementById("hpv-meta");
+const stratifierPrevalencePanel = document.getElementById("stratifier-prevalence-panel");
 const tooltip = document.getElementById("chart-tooltip");
 
 let summary = null;
 let activeAnalysis = null;
 let activeGene = "";
+let negativeEssentialityCutoff = Number(cutoffInput.value);
 
 function escapeHtml(value) {
   return String(value || "")
@@ -67,6 +74,21 @@ function formatPair(entry) {
   return `${formatScore(entry.positive_average)} / ${formatScore(entry.negative_average)}`;
 }
 
+function visibleRows(key) {
+  const rows = activeAnalysis.datasets[key];
+  if (negativeDisplayMode.value === "color") {
+    return rows;
+  }
+  return rows.filter((row) => row.negative_average > negativeEssentialityCutoff);
+}
+
+function negativeDependencyColor(value) {
+  const normalized = Math.max(0, Math.min(1, (value + 1.5) / 1.5));
+  const hue = 4 + normalized * 136;
+  const lightness = 43 + normalized * 5;
+  return `hsl(${hue}, 66%, ${lightness}%)`;
+}
+
 function resizeCanvas(canvas) {
   const rect = canvas.getBoundingClientRect();
   const ratio = window.devicePixelRatio || 1;
@@ -83,8 +105,8 @@ function niceTicks(min, max, count = 5) {
   }
   const span = max - min;
   const step = Math.pow(10, Math.floor(Math.log10(span / count)));
-  const err = span / count / step;
-  const niceStep = err >= 7.5 ? step * 10 : err >= 3.5 ? step * 5 : err >= 1.5 ? step * 2 : step;
+  const error = span / count / step;
+  const niceStep = error >= 7.5 ? step * 10 : error >= 3.5 ? step * 5 : error >= 1.5 ? step * 2 : step;
   const ticks = [];
   for (let value = Math.ceil(min / niceStep) * niceStep; value <= max + niceStep / 2; value += niceStep) {
     ticks.push(value);
@@ -92,37 +114,98 @@ function niceTicks(min, max, count = 5) {
   return ticks;
 }
 
+function paddedExtent(values, fallbackMin = -1, fallbackMax = 1) {
+  if (!values.length) {
+    return [fallbackMin, fallbackMax];
+  }
+  const min = Math.min(...values);
+  const max = Math.max(...values);
+  const padding = Math.max(0.05, (max - min) * 0.06);
+  return [min - padding, max + padding];
+}
+
+function xLabel() {
+  return `Absolute dependency in ${activeAnalysis.positive_label}`;
+}
+
 function yLabel() {
   return `${activeAnalysis.positive_label} minus ${activeAnalysis.negative_label}`;
 }
 
+function drawQuadrants(ctx, margin, plotWidth, plotHeight, cutoffX, zeroY) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(margin.left, margin.top, plotWidth, plotHeight);
+  ctx.clip();
+  ctx.fillStyle = "rgba(245, 196, 0, 0.07)";
+  ctx.fillRect(margin.left, margin.top, Math.max(0, cutoffX - margin.left), Math.max(0, zeroY - margin.top));
+  ctx.fillStyle = "rgba(35, 122, 87, 0.06)";
+  ctx.fillRect(margin.left, zeroY, Math.max(0, cutoffX - margin.left), Math.max(0, margin.top + plotHeight - zeroY));
+  ctx.fillStyle = "rgba(180, 58, 58, 0.04)";
+  ctx.fillRect(cutoffX, margin.top, Math.max(0, margin.left + plotWidth - cutoffX), Math.max(0, zeroY - margin.top));
+  ctx.restore();
+}
+
+function drawNegativeDependencyLegend(ctx, width) {
+  const left = Math.max(70, width - 214);
+  const top = 16;
+  const gradient = ctx.createLinearGradient(left, top, left + 112, top);
+  gradient.addColorStop(0, negativeDependencyColor(-1.5));
+  gradient.addColorStop(0.67, negativeDependencyColor(-0.5));
+  gradient.addColorStop(1, negativeDependencyColor(0));
+  ctx.font = "11px IBM Plex Sans, sans-serif";
+  ctx.fillStyle = "#5e6d74";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("Negative cohort dependency", left, 2);
+  ctx.fillStyle = gradient;
+  ctx.fillRect(left, top, 112, 8);
+  ctx.strokeStyle = "#b8bbb6";
+  ctx.strokeRect(left, top, 112, 8);
+  ctx.fillStyle = "#5e6d74";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "top";
+  ctx.fillText("<= -1.5", left, top + 11);
+  ctx.textAlign = "right";
+  ctx.fillText(">= 0", left + 112, top + 11);
+}
+
 function drawChart(key) {
   const chart = charts[key];
-  const data = activeAnalysis.datasets[key];
+  const allData = activeAnalysis.datasets[key];
+  const data = visibleRows(key);
   const { width, height, ctx } = resizeCanvas(chart.canvas);
-  const margin = { top: 18, right: 18, bottom: 40, left: 56 };
+  const margin = { top: negativeDisplayMode.value === "color" ? 44 : 28, right: 18, bottom: 54, left: 58 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
-  const scores = data.map((d) => d.score);
-  const minScore = Math.min(...scores);
-  const maxScore = Math.max(...scores);
-  const yMin = Math.floor((minScore - 0.05) * 10) / 10;
-  const yMax = Math.ceil((maxScore + 0.05) * 10) / 10;
+  const [xMin, xMax] = paddedExtent(
+    [...allData.map((d) => d.positive_average), negativeEssentialityCutoff],
+    -1,
+    0
+  );
+  const [yMin, yMax] = paddedExtent(allData.map((d) => d.score), -1, 1);
+  const xAt = (value) => margin.left + ((value - xMin) / (xMax - xMin)) * plotWidth;
+  const yAt = (value) => margin.top + ((yMax - value) / (yMax - yMin)) * plotHeight;
+  const cutoffX = xAt(negativeEssentialityCutoff);
+  const zeroY = yAt(0);
   const highlighted = activeGene ? data.filter((d) => d.gene.toLowerCase().includes(activeGene)) : [];
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, width, height);
+  if (negativeDisplayMode.value === "cutoff") {
+    drawQuadrants(ctx, margin, plotWidth, plotHeight, cutoffX, zeroY);
+  }
   ctx.strokeStyle = "#d9ddd8";
   ctx.lineWidth = 1;
   ctx.strokeRect(margin.left, margin.top, plotWidth, plotHeight);
 
   ctx.font = "12px IBM Plex Sans, sans-serif";
   ctx.fillStyle = "#5e6d74";
-  ctx.textAlign = "right";
   ctx.textBaseline = "middle";
+  ctx.textAlign = "right";
   for (const tick of niceTicks(yMin, yMax)) {
-    const y = margin.top + ((yMax - tick) / (yMax - yMin)) * plotHeight;
+    const y = yAt(tick);
     ctx.strokeStyle = "#eef1ed";
     ctx.beginPath();
     ctx.moveTo(margin.left, y);
@@ -131,8 +214,20 @@ function drawChart(key) {
     ctx.fillText(tick.toFixed(1), margin.left - 9, y);
   }
 
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  for (const tick of niceTicks(xMin, xMax)) {
+    const x = xAt(tick);
+    ctx.strokeStyle = "#eef1ed";
+    ctx.beginPath();
+    ctx.moveTo(x, margin.top);
+    ctx.lineTo(x, margin.top + plotHeight);
+    ctx.stroke();
+    ctx.fillStyle = "#5e6d74";
+    ctx.fillText(tick.toFixed(1), x, margin.top + plotHeight + 8);
+  }
+
   if (yMin < 0 && yMax > 0) {
-    const zeroY = margin.top + (yMax / (yMax - yMin)) * plotHeight;
     ctx.strokeStyle = "#1f2a30";
     ctx.lineWidth = 1.2;
     ctx.beginPath();
@@ -141,28 +236,48 @@ function drawChart(key) {
     ctx.stroke();
   }
 
+  if (negativeDisplayMode.value === "cutoff" && cutoffX >= margin.left && cutoffX <= margin.left + plotWidth) {
+    ctx.strokeStyle = "#b07d00";
+    ctx.lineWidth = 1.4;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(cutoffX, margin.top);
+    ctx.lineTo(cutoffX, margin.top + plotHeight);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = "#7a5900";
+    ctx.textAlign = cutoffX > width - 145 ? "right" : "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`Negative cutoff ${negativeEssentialityCutoff.toFixed(2)}`, cutoffX + (cutoffX > width - 145 ? -5 : 5), 7);
+  }
+
   ctx.save();
   ctx.translate(15, margin.top + plotHeight / 2);
   ctx.rotate(-Math.PI / 2);
   ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
   ctx.fillStyle = "#1f2a30";
-  ctx.fillText("Differential dependency", 0, 0);
+  ctx.fillText(`Differential dependency: ${yLabel()}`, 0, 0);
   ctx.restore();
 
   ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
   ctx.fillStyle = "#5e6d74";
-  ctx.fillText("Genes ranked by differential score", margin.left + plotWidth / 2, height - 14);
+  ctx.fillText(xLabel(), margin.left + plotWidth / 2, height - 5);
 
-  const sorted = [...data].sort((a, b) => a.rank - b.rank);
+  if (negativeDisplayMode.value === "color") {
+    drawNegativeDependencyLegend(ctx, width);
+  }
+
   const positions = [];
-  ctx.fillStyle = chart.color;
   ctx.globalAlpha = activeGene ? 0.16 : 0.58;
-  sorted.forEach((d, i) => {
-    const x = margin.left + (i / Math.max(1, sorted.length - 1)) * plotWidth;
-    const y = margin.top + ((yMax - d.score) / (yMax - yMin)) * plotHeight;
+  data.forEach((d) => {
+    const x = xAt(d.positive_average);
+    const y = yAt(d.score);
     positions.push({ x, y, datum: d });
+    ctx.fillStyle = negativeDisplayMode.value === "color" ? negativeDependencyColor(d.negative_average) : chart.color;
     ctx.beginPath();
-    ctx.arc(x, y, 1.55, 0, Math.PI * 2);
+    ctx.arc(x, y, 1.7, 0, Math.PI * 2);
     ctx.fill();
   });
   ctx.globalAlpha = 1;
@@ -172,20 +287,22 @@ function drawChart(key) {
     ctx.strokeStyle = "#1f2a30";
     ctx.lineWidth = 1.5;
     highlighted.forEach((d) => {
-      const p = positions.find((item) => item.datum.gene === d.gene);
-      if (!p) {
+      const point = positions.find((item) => item.datum.gene === d.gene);
+      if (!point) {
         return;
       }
       ctx.beginPath();
-      ctx.arc(p.x, p.y, 4.4, 0, Math.PI * 2);
+      ctx.arc(point.x, point.y, 4.5, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     });
   }
 
   chart.points = positions;
-  chart.count.value = `${data.length.toLocaleString()} genes`;
-  chart.subtitle.textContent = `${activeAnalysis.positive_label} average minus ${activeAnalysis.negative_label} average`;
+  chart.count.value = negativeDisplayMode.value === "cutoff"
+    ? `${data.length.toLocaleString()} / ${allData.length.toLocaleString()} genes`
+    : `${allData.length.toLocaleString()} genes`;
+  chart.subtitle.textContent = `${activeAnalysis.positive_label} absolute dependency (X) and ${yLabel()} (Y)${negativeDisplayMode.value === "color" ? "; dot color is negative-cohort dependency" : ""}`;
 }
 
 function renderMeta() {
@@ -202,7 +319,7 @@ function renderMeta() {
   metaPanel.innerHTML = `
     <div>
       <strong>${escapeHtml(activeAnalysis.label)}</strong>
-      <span class="small-line">${escapeHtml(activeAnalysis.source)}. Score is ${escapeHtml(activeAnalysis.positive_label)} average minus ${escapeHtml(activeAnalysis.negative_label)} average.</span>
+      <span class="small-line">${escapeHtml(activeAnalysis.source)}. Y-axis is ${escapeHtml(yLabel())}; X-axis is absolute dependency in ${escapeHtml(activeAnalysis.positive_label)}.</span>
     </div>
     <div>
       <strong>Screened comparison sets</strong>
@@ -215,9 +332,32 @@ function renderMeta() {
   `;
 }
 
+function formatPercent(value) {
+  const percent = value * 100;
+  return `${percent >= 10 ? percent.toFixed(0) : percent.toFixed(1)}%`;
+}
+
+function renderStratifierPrevalence() {
+  const prevalence = activeAnalysis.stratifier_prevalence;
+  if (!prevalence) {
+    stratifierPrevalencePanel.innerHTML = "";
+    return;
+  }
+  stratifierPrevalencePanel.innerHTML = `
+    <div>
+      <h2>Stratifier Prevalence</h2>
+      <p class="small-line">${escapeHtml(activeAnalysis.positive_label)} across all DepMap cancer models.</p>
+    </div>
+    <div class="prevalence-stat">
+      <strong>${formatPercent(prevalence.frequency)}</strong>
+      <span>${prevalence.positive.toLocaleString()} of ${prevalence.total.toLocaleString()} ${escapeHtml(prevalence.denominator)}</span>
+    </div>
+  `;
+}
+
 function renderResults() {
-  const rnai = new Map(activeAnalysis.datasets.rnai.map((d) => [d.gene, d]));
-  const crispr = new Map(activeAnalysis.datasets.crispr.map((d) => [d.gene, d]));
+  const rnai = new Map(visibleRows("rnai").map((d) => [d.gene, d]));
+  const crispr = new Map(visibleRows("crispr").map((d) => [d.gene, d]));
   const genes = new Set([...rnai.keys(), ...crispr.keys()]);
   const rows = [...genes]
     .filter((gene) => (activeGene ? gene.toLowerCase().includes(activeGene) : false))
@@ -229,8 +369,10 @@ function renderResults() {
       return `
         <tr>
           <td><strong>${escapeHtml(gene)}</strong></td>
+          <td>${c ? formatScore(c.positive_average) : ""}</td>
           <td>${c ? formatScore(c.score) + ` (#${c.rank})` : ""}</td>
           <td>${formatPair(c)}</td>
+          <td>${r ? formatScore(r.positive_average) : ""}</td>
           <td>${r ? formatScore(r.score) + ` (#${r.rank})` : ""}</td>
           <td>${formatPair(r)}</td>
         </tr>
@@ -239,19 +381,32 @@ function renderResults() {
 
   resultBody.innerHTML = rows.length
     ? rows.join("")
-    : '<tr><td colspan="5" class="muted">Type a gene symbol to highlight it in both charts.</td></tr>';
+    : `<tr><td colspan="7" class="muted">${activeGene && negativeDisplayMode.value === "cutoff" ? "No matched genes pass the active negative-cohort cutoff." : "Type a gene symbol to highlight it in both charts."}</td></tr>`;
 }
 
 function renderAll() {
   renderMeta();
+  renderStratifierPrevalence();
   drawChart("crispr");
   drawChart("rnai");
   renderResults();
 }
 
 function populateAnalyses() {
-  analysisSelect.innerHTML = summary.analyses
-    .map((analysis) => `<option value="${escapeHtml(analysis.id)}">${escapeHtml(analysis.label)}</option>`)
+  const groups = new Map();
+  summary.analyses.forEach((analysis) => {
+    const group = analysis.category || "Additional analyses";
+    if (!groups.has(group)) {
+      groups.set(group, []);
+    }
+    groups.get(group).push(analysis);
+  });
+  analysisSelect.innerHTML = [...groups.entries()]
+    .map(([group, analyses]) => `
+      <optgroup label="${escapeHtml(group)}">
+        ${analyses.map((analysis) => `<option value="${escapeHtml(analysis.id)}">${escapeHtml(analysis.label)}</option>`).join("")}
+      </optgroup>
+    `)
     .join("");
   activeAnalysis = summary.analyses[0];
 }
@@ -266,9 +421,9 @@ function nearestPoint(chart, x, y) {
   let nearest = null;
   let best = Infinity;
   for (const point of chart.points) {
-    const dist = Math.hypot(point.x - x, point.y - y);
-    if (dist < best) {
-      best = dist;
+    const distance = Math.hypot(point.x - x, point.y - y);
+    if (distance < best) {
+      best = distance;
       nearest = point;
     }
   }
@@ -279,8 +434,9 @@ function showTooltip(event, key, point) {
   const d = point.datum;
   tooltip.innerHTML = `
     <strong>${escapeHtml(d.gene)}</strong>
-    <span>${charts[key].title} rank #${d.rank.toLocaleString()}</span>
-    <span>Diff: ${formatScore(d.score)}</span>
+    <span>${charts[key].title} overall differential rank #${d.rank.toLocaleString()}</span>
+    <span>Positive absolute: ${formatScore(d.positive_average)}</span>
+    <span>Differential: ${formatScore(d.score)}</span>
     <span>${escapeHtml(activeAnalysis.positive_label)}: ${formatScore(d.positive_average)} (n=${d.positive_n})</span>
     <span>${escapeHtml(activeAnalysis.negative_label)}: ${formatScore(d.negative_average)} (n=${d.negative_n})</span>
   `;
@@ -291,6 +447,16 @@ function showTooltip(event, key, point) {
 
 function hideTooltip() {
   tooltip.classList.add("hidden");
+}
+
+function updateCutoffControl() {
+  negativeEssentialityCutoff = Number(cutoffInput.value);
+  cutoffValue.value = negativeEssentialityCutoff.toFixed(2);
+  const showingCutoff = negativeDisplayMode.value === "cutoff";
+  cutoffSettings.classList.toggle("hidden", !showingCutoff);
+  negativeColorHelp.classList.toggle("hidden", showingCutoff);
+  cutoffInput.disabled = !showingCutoff;
+  cutoffValue.classList.toggle("is-disabled", cutoffInput.disabled);
 }
 
 for (const [key, chart] of Object.entries(charts)) {
@@ -319,6 +485,7 @@ fetch("/api/dependency-summary")
   .then((data) => {
     summary = normalizeSummary(data);
     populateAnalyses();
+    updateCutoffControl();
     renderAll();
   })
   .catch(() => {
@@ -331,6 +498,22 @@ analysisSelect.addEventListener("change", (event) => {
 
 searchInput.addEventListener("input", (event) => {
   activeGene = event.target.value.trim().toLowerCase();
+  if (summary) {
+    renderAll();
+  }
+});
+
+cutoffInput.addEventListener("input", () => {
+  updateCutoffControl();
+  hideTooltip();
+  if (summary) {
+    renderAll();
+  }
+});
+
+negativeDisplayMode.addEventListener("change", () => {
+  updateCutoffControl();
+  hideTooltip();
   if (summary) {
     renderAll();
   }
