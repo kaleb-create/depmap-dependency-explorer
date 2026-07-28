@@ -300,6 +300,32 @@ input[type='range'] {
   font-weight: 600;
 }
 
+.gene-result-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #111111;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+  text-decoration: underline;
+  text-decoration-color: #d4a900;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
+}
+
+.gene-result-button:hover,
+.gene-result-button:focus-visible {
+  color: #8a6c00;
+}
+
+.gene-result-button.is-active {
+  color: #111111;
+  text-decoration-color: #ffcc00;
+  text-decoration-thickness: 4px;
+}
+
 .chip {
   border-radius: 999px;
   font-size: 12px;
@@ -359,6 +385,10 @@ input[type='range'] {
   gap: 10px 12px;
   width: 100%;
   margin-bottom: 16px;
+}
+
+.explorer-controls > label {
+  align-self: start;
 }
 
 .cutoff-control {

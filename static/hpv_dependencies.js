@@ -19,6 +19,7 @@ const charts = {
 
 const analysisSelect = document.getElementById("analysis-select");
 const searchInput = document.getElementById("gene-search");
+const geneOptions = document.getElementById("gene-options");
 const negativeDisplayMode = document.getElementById("negative-display-mode");
 const cutoffInput = document.getElementById("negative-cutoff");
 const cutoffValue = document.getElementById("negative-cutoff-value");
@@ -32,6 +33,8 @@ const tooltip = document.getElementById("chart-tooltip");
 let summary = null;
 let activeAnalysis = null;
 let activeGene = "";
+let geneQuery = "";
+let analysisLoadToken = 0;
 let negativeEssentialityCutoff = Number(cutoffInput.value);
 
 function escapeHtml(value) {
@@ -55,11 +58,17 @@ function normalizeRows(rows) {
   }));
 }
 
-function normalizeSummary(data) {
-  data.analyses.forEach((analysis) => {
+function normalizeAnalysis(analysis) {
+  if (analysis.datasets && !analysis.datasets_normalized) {
     analysis.datasets.crispr = normalizeRows(analysis.datasets.crispr);
     analysis.datasets.rnai = normalizeRows(analysis.datasets.rnai);
-  });
+    analysis.datasets_normalized = true;
+  }
+  return analysis;
+}
+
+function normalizeSummary(data) {
+  data.analyses.forEach(normalizeAnalysis);
   return data;
 }
 
@@ -188,7 +197,9 @@ function drawChart(key) {
   const yAt = (value) => margin.top + ((yMax - value) / (yMax - yMin)) * plotHeight;
   const cutoffX = xAt(negativeEssentialityCutoff);
   const zeroY = yAt(0);
-  const highlighted = activeGene ? data.filter((d) => d.gene.toLowerCase().includes(activeGene)) : [];
+  const highlighted = activeGene
+    ? data.filter((d) => d.gene.toLowerCase() === activeGene.toLowerCase())
+    : [];
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#ffffff";
@@ -346,7 +357,7 @@ function renderStratifierPrevalence() {
   stratifierPrevalencePanel.innerHTML = `
     <div>
       <h2>Stratifier Prevalence</h2>
-      <p class="small-line">${escapeHtml(activeAnalysis.positive_label)} across all DepMap cancer models.</p>
+      <p class="small-line">${escapeHtml(activeAnalysis.positive_label)} among ${escapeHtml(prevalence.denominator)}.</p>
     </div>
     <div class="prevalence-stat">
       <strong>${formatPercent(prevalence.frequency)}</strong>
@@ -360,15 +371,16 @@ function renderResults() {
   const crispr = new Map(visibleRows("crispr").map((d) => [d.gene, d]));
   const genes = new Set([...rnai.keys(), ...crispr.keys()]);
   const rows = [...genes]
-    .filter((gene) => (activeGene ? gene.toLowerCase().includes(activeGene) : false))
+    .filter((gene) => (geneQuery ? gene.toLowerCase().includes(geneQuery.toLowerCase()) : false))
     .sort()
     .slice(0, 50)
     .map((gene) => {
       const r = rnai.get(gene);
       const c = crispr.get(gene);
+      const isSelected = activeGene && gene.toLowerCase() === activeGene.toLowerCase();
       return `
         <tr>
-          <td><strong>${escapeHtml(gene)}</strong></td>
+          <td><button class="gene-result-button${isSelected ? " is-active" : ""}" type="button" data-gene="${escapeHtml(gene)}" aria-pressed="${isSelected ? "true" : "false"}">${escapeHtml(gene)}</button></td>
           <td>${c ? formatScore(c.positive_average) : ""}</td>
           <td>${c ? formatScore(c.score) + ` (#${c.rank})` : ""}</td>
           <td>${formatPair(c)}</td>
@@ -381,7 +393,7 @@ function renderResults() {
 
   resultBody.innerHTML = rows.length
     ? rows.join("")
-    : `<tr><td colspan="7" class="muted">${activeGene && negativeDisplayMode.value === "cutoff" ? "No matched genes pass the active negative-cohort cutoff." : "Type a gene symbol to highlight it in both charts."}</td></tr>`;
+    : `<tr><td colspan="7" class="muted">${geneQuery && negativeDisplayMode.value === "cutoff" ? "No matched genes pass the active negative-cohort cutoff." : "Search for a gene, then select an exact symbol to highlight it."}</td></tr>`;
 }
 
 function renderAll() {
@@ -408,12 +420,64 @@ function populateAnalyses() {
       </optgroup>
     `)
     .join("");
-  activeAnalysis = summary.analyses[0];
 }
 
-function setAnalysis(analysisId) {
+function populateGeneOptions() {
+  const genes = new Set([
+    ...activeAnalysis.datasets.crispr.map((row) => row.gene),
+    ...activeAnalysis.datasets.rnai.map((row) => row.gene),
+  ]);
+  geneOptions.innerHTML = [...genes]
+    .sort()
+    .map((gene) => `<option value="${escapeHtml(gene)}"></option>`)
+    .join("");
+}
+
+function selectExactGene(value) {
+  const query = value.trim();
+  geneQuery = query;
+  if (!activeAnalysis || !activeAnalysis.datasets) {
+    activeGene = "";
+    return;
+  }
+  const genes = new Map(
+    [
+      ...activeAnalysis.datasets.crispr,
+      ...activeAnalysis.datasets.rnai,
+    ].map((row) => [row.gene.toLowerCase(), row.gene])
+  );
+  activeGene = genes.get(query.toLowerCase()) || "";
+  if (activeGene) {
+    geneQuery = activeGene;
+    searchInput.value = activeGene;
+  }
+}
+
+async function setAnalysis(analysisId) {
+  const token = ++analysisLoadToken;
   activeAnalysis = summary.analyses.find((analysis) => analysis.id === analysisId) || summary.analyses[0];
+  analysisSelect.value = activeAnalysis.id;
   hideTooltip();
+  if (!activeAnalysis.datasets) {
+    metaPanel.innerHTML = '<div><strong>Loading analysis</strong><span class="small-line">Fetching dependency data for the selected comparison...</span></div>';
+    try {
+      const response = await fetch(activeAnalysis.data_url);
+      if (!response.ok) {
+        throw new Error("Analysis data unavailable");
+      }
+      Object.assign(activeAnalysis, normalizeAnalysis(await response.json()));
+    } catch (error) {
+      if (token === analysisLoadToken) {
+        metaPanel.innerHTML = '<div><strong>Analysis unavailable</strong><span class="small-line">Rebuild the dependency analysis data and try again.</span></div>';
+      }
+      return;
+    }
+  }
+  if (token !== analysisLoadToken) {
+    return;
+  }
+  populateGeneOptions();
+  selectExactGene(searchInput.value);
   renderAll();
 }
 
@@ -486,27 +550,36 @@ fetch("/api/dependency-summary")
     summary = normalizeSummary(data);
     populateAnalyses();
     updateCutoffControl();
-    renderAll();
+    return setAnalysis(summary.analyses[0].id);
   })
   .catch(() => {
     metaPanel.innerHTML = '<div><strong>Data summary not found</strong><span class="small-line">Run scripts/build_hpv_dependency_data.py.</span></div>';
   });
 
-analysisSelect.addEventListener("change", (event) => {
-  setAnalysis(event.target.value);
+analysisSelect.addEventListener("change", async (event) => {
+  await setAnalysis(event.target.value);
 });
 
 searchInput.addEventListener("input", (event) => {
-  activeGene = event.target.value.trim().toLowerCase();
-  if (summary) {
+  selectExactGene(event.target.value);
+  if (summary && activeAnalysis && activeAnalysis.datasets) {
     renderAll();
   }
+});
+
+resultBody.addEventListener("click", (event) => {
+  const button = event.target.closest(".gene-result-button");
+  if (!button) {
+    return;
+  }
+  selectExactGene(button.dataset.gene || "");
+  renderAll();
 });
 
 cutoffInput.addEventListener("input", () => {
   updateCutoffControl();
   hideTooltip();
-  if (summary) {
+  if (summary && activeAnalysis?.datasets && activeAnalysis?.included_models) {
     renderAll();
   }
 });
@@ -514,13 +587,13 @@ cutoffInput.addEventListener("input", () => {
 negativeDisplayMode.addEventListener("change", () => {
   updateCutoffControl();
   hideTooltip();
-  if (summary) {
+  if (summary && activeAnalysis?.datasets && activeAnalysis?.included_models) {
     renderAll();
   }
 });
 
 window.addEventListener("resize", () => {
-  if (summary) {
+  if (summary && activeAnalysis?.datasets && activeAnalysis?.included_models) {
     renderAll();
   }
 });

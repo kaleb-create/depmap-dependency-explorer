@@ -18,7 +18,16 @@
     <select id="analysis-select"></select>
   </label>
   <label for="gene-search">Gene search
-    <input id="gene-search" type="search" placeholder="Search TP53, E6AP, MYC..." autocomplete="off" />
+    <input
+      id="gene-search"
+      type="search"
+      list="gene-options"
+      placeholder="Search TP53, E6AP, MYC..."
+      autocomplete="off"
+      aria-describedby="gene-search-help"
+    />
+    <datalist id="gene-options"></datalist>
+    <span id="gene-search-help" class="small-line">Select an exact gene to highlight one protein across both charts.</span>
   </label>
   <fieldset class="cutoff-control">
     <label for="negative-display-mode">Negative cohort display

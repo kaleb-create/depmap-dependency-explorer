@@ -9,6 +9,7 @@ from typing import Any
 
 from flask import (
     Flask,
+    abort,
     flash,
     g,
     redirect,
@@ -27,6 +28,7 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "app.db"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 USING_POSTGRES = bool(DATABASE_URL)
 DEPENDENCY_SUMMARY_PATH = os.path.join(BASE_DIR, "static", "data", "hpv_dependency_summary.json")
+DEPENDENCY_ANALYSIS_DIR = os.path.join(BASE_DIR, "static", "data", "dependency_analyses")
 UTC = timezone.utc
 MIN_DEPENDENCY_GROUP_VALUES = 3
 MIN_DEPENDENCY_GROUP_COVERAGE = 0.5
@@ -309,11 +311,9 @@ def filter_low_coverage_rows(analysis: dict[str, Any]) -> None:
 
 
 def min_dependency_values(group_size: int) -> int:
-    if group_size <= 0:
-        return 1
-    return min(
-        group_size,
-        max(MIN_DEPENDENCY_GROUP_VALUES, math.ceil(group_size * MIN_DEPENDENCY_GROUP_COVERAGE)),
+    return max(
+        MIN_DEPENDENCY_GROUP_VALUES,
+        math.ceil(max(0, group_size) * MIN_DEPENDENCY_GROUP_COVERAGE),
     )
 
 
@@ -566,6 +566,18 @@ def hpv_dependencies():
 @login_required
 def dependency_summary():
     return build_dependency_summary()
+
+
+@app.route("/api/dependency-analysis/<analysis_id>")
+@login_required
+def dependency_analysis(analysis_id: str):
+    if not analysis_id.replace("_", "").isalnum():
+        abort(404)
+    analysis_path = os.path.join(DEPENDENCY_ANALYSIS_DIR, f"{analysis_id}.json")
+    if not os.path.isfile(analysis_path):
+        abort(404)
+    with open(analysis_path) as f:
+        return json.load(f)
 
 
 @app.route("/stratifiers")
