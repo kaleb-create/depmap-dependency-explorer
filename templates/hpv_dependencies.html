@@ -6,7 +6,7 @@
 <section class="hero hpv-hero">
   <div>
     <h1>Differential Dependencies</h1>
-    <p class="muted">Compare absolute dependency in the positive cohort with differential dependency between cohorts.</p>
+    <p class="muted">Compare absolute dependency with a variability-normalized relative essentiality effect between cohorts.</p>
   </div>
   <div class="explorer-actions">
     <a class="btn-primary btn-ghost" href="{{ url_for('manage_stratifiers') }}">Manage stratifiers</a>
@@ -85,7 +85,7 @@
   <div class="dependency-head">
     <div>
       <h2>Matched Genes</h2>
-      <p class="small-line">Search results show the absolute positive-cohort score, differential score, and both group averages.</p>
+      <p class="small-line">Search results show absolute positive-cohort dependency, standardized relative essentiality, and both group averages.</p>
     </div>
   </div>
   <div class="table-scroll">
@@ -94,10 +94,10 @@
         <tr>
           <th>Gene</th>
           <th>CRISPR positive</th>
-          <th>CRISPR diff</th>
+          <th>CRISPR effect</th>
           <th>CRISPR group avgs</th>
           <th>siRNA positive</th>
-          <th>siRNA diff</th>
+          <th>siRNA effect</th>
           <th>siRNA group avgs</th>
         </tr>
       </thead>

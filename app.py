@@ -277,6 +277,7 @@ def fetch_custom_stratifiers() -> list[Any]:
 
 def custom_stratifier_analysis(row: Any) -> dict[str, Any]:
     analysis = json.loads(row["analysis_json"])
+    analysis.setdefault("effect_metric", "raw_difference")
     analysis["id"] = f"custom-{row['id']}"
     analysis["label"] = f"{analysis['label']} *"
     analysis["category"] = "Custom stratifiers"

@@ -55,6 +55,7 @@ function normalizeRows(rows) {
     positive_n: row[4],
     negative_n: row[5],
     rank: row[6],
+    raw_difference: Number.isFinite(row[7]) ? row[7] : row[2] - row[3],
   }));
 }
 
@@ -138,6 +139,9 @@ function xLabel() {
 }
 
 function yLabel() {
+  if (activeAnalysis.effect_metric === "hedges_g") {
+    return `Hedges' g: ${activeAnalysis.positive_label} vs ${activeAnalysis.negative_label}`;
+  }
   return `${activeAnalysis.positive_label} minus ${activeAnalysis.negative_label}`;
 }
 
@@ -268,7 +272,7 @@ function drawChart(key) {
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillStyle = "#1f2a30";
-  ctx.fillText(`Differential dependency: ${yLabel()}`, 0, 0);
+  ctx.fillText(activeAnalysis.effect_metric === "hedges_g" ? "Relative essentiality (Hedges' g)" : `Differential dependency: ${yLabel()}`, 0, 0);
   ctx.restore();
 
   ctx.textAlign = "center";
@@ -313,7 +317,7 @@ function drawChart(key) {
   chart.count.value = negativeDisplayMode.value === "cutoff"
     ? `${data.length.toLocaleString()} / ${allData.length.toLocaleString()} genes`
     : `${allData.length.toLocaleString()} genes`;
-  chart.subtitle.textContent = `${activeAnalysis.positive_label} absolute dependency (X) and ${yLabel()} (Y)${negativeDisplayMode.value === "color" ? "; dot color is negative-cohort dependency" : ""}`;
+  chart.subtitle.textContent = `${activeAnalysis.positive_label} absolute dependency (X) and ${activeAnalysis.effect_metric === "hedges_g" ? "standardized positive-vs-negative effect (Y)" : `${yLabel()} (Y)`}${negativeDisplayMode.value === "color" ? "; dot color is negative-cohort dependency" : ""}`;
 }
 
 function renderMeta() {
@@ -330,7 +334,7 @@ function renderMeta() {
   metaPanel.innerHTML = `
     <div>
       <strong>${escapeHtml(activeAnalysis.label)}</strong>
-      <span class="small-line">${escapeHtml(activeAnalysis.source)}. Y-axis is ${escapeHtml(yLabel())}; X-axis is absolute dependency in ${escapeHtml(activeAnalysis.positive_label)}.</span>
+      <span class="small-line">${escapeHtml(activeAnalysis.source)}. ${activeAnalysis.effect_metric === "hedges_g" ? `Y-axis is Hedges' g standardized by pooled within-cohort variability; negative values indicate greater essentiality in ${escapeHtml(activeAnalysis.positive_label)}.` : `Y-axis is ${escapeHtml(yLabel())}.`} X-axis is absolute dependency in ${escapeHtml(activeAnalysis.positive_label)}.</span>
     </div>
     <div>
       <strong>Screened comparison sets</strong>
@@ -498,9 +502,10 @@ function showTooltip(event, key, point) {
   const d = point.datum;
   tooltip.innerHTML = `
     <strong>${escapeHtml(d.gene)}</strong>
-    <span>${charts[key].title} overall differential rank #${d.rank.toLocaleString()}</span>
+    <span>${charts[key].title} positive-cohort selectivity rank #${d.rank.toLocaleString()}</span>
     <span>Positive absolute: ${formatScore(d.positive_average)}</span>
-    <span>Differential: ${formatScore(d.score)}</span>
+    <span>${activeAnalysis.effect_metric === "hedges_g" ? "Standardized effect (Hedges' g)" : "Differential"}: ${formatScore(d.score)}</span>
+    <span>Raw mean difference: ${formatScore(d.raw_difference)}</span>
     <span>${escapeHtml(activeAnalysis.positive_label)}: ${formatScore(d.positive_average)} (n=${d.positive_n})</span>
     <span>${escapeHtml(activeAnalysis.negative_label)}: ${formatScore(d.negative_average)} (n=${d.negative_n})</span>
   `;

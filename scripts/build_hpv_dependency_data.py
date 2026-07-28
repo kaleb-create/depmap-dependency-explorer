@@ -467,9 +467,11 @@ def row_differentials(
 ) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
     eligible_models = eligible_models or {}
     sums = {key: None for key in analyses}
+    sum_squares = {key: None for key in analyses}
     counts = {key: None for key in analyses}
     positive_rows = {key: [] for key in analyses}
     eligible_sums = {key: None for key in eligible_models}
+    eligible_sum_squares = {key: None for key in eligible_models}
     eligible_counts = {key: None for key in eligible_models}
     eligible_rows = {key: 0 for key in eligible_models}
 
@@ -478,13 +480,16 @@ def row_differentials(
         header = next(reader)
         labels = header[1:]
         total_sums = [0.0] * len(labels)
+        total_sum_squares = [0.0] * len(labels)
         total_counts = [0] * len(labels)
         total_rows = 0
         for key in analyses:
             sums[key] = [0.0] * len(labels)
+            sum_squares[key] = [0.0] * len(labels)
             counts[key] = [0] * len(labels)
         for key in eligible_models:
             eligible_sums[key] = [0.0] * len(labels)
+            eligible_sum_squares[key] = [0.0] * len(labels)
             eligible_counts[key] = [0] * len(labels)
 
         for row in reader:
@@ -506,6 +511,7 @@ def row_differentials(
                 if value is None:
                     continue
                 total_sums[i] += value
+                total_sum_squares[i] += value * value
                 total_counts[i] += 1
 
             for key, positives in analyses.items():
@@ -517,6 +523,7 @@ def row_differentials(
                         if value is None:
                             continue
                         eligible_sums[key][i] += value
+                        eligible_sum_squares[key][i] += value * value
                         eligible_counts[key][i] += 1
                 if model_id not in positives:
                     continue
@@ -525,6 +532,7 @@ def row_differentials(
                     if value is None:
                         continue
                     sums[key][i] += value
+                    sum_squares[key][i] += value * value
                     counts[key][i] += 1
 
     datasets: dict[str, list[dict[str, object]]] = {}
@@ -532,6 +540,9 @@ def row_differentials(
         rows = []
         analysis_row_count = eligible_rows[key] if key in eligible_models else total_rows
         analysis_sums = eligible_sums[key] if key in eligible_models else total_sums
+        analysis_sum_squares = (
+            eligible_sum_squares[key] if key in eligible_models else total_sum_squares
+        )
         analysis_counts = eligible_counts[key] if key in eligible_models else total_counts
         negative_row_count = analysis_row_count - len(positive_rows[key])
         min_positive_n = min_values_for_group(len(positive_rows[key]))
@@ -542,14 +553,27 @@ def row_differentials(
             if pos_n < min_positive_n or neg_n < min_negative_n:
                 continue
             positive_average = sums[key][i] / pos_n
-            negative_average = (analysis_sums[i] - sums[key][i]) / neg_n
+            negative_sum = analysis_sums[i] - sums[key][i]
+            negative_average = negative_sum / neg_n
+            raw_difference = positive_average - negative_average
+            effect_size = hedges_g_from_moments(
+                sums[key][i],
+                sum_squares[key][i],
+                pos_n,
+                negative_sum,
+                analysis_sum_squares[i] - sum_squares[key][i],
+                neg_n,
+            )
+            if effect_size is None:
+                continue
             gene, entrez = parse_gene(label)
             rows.append(
                 {
                     "gene": gene,
                     "entrez": entrez,
                     "label": label,
-                    "score": round(positive_average - negative_average, 6),
+                    "score": round(effect_size, 6),
+                    "raw_difference": round(raw_difference, 6),
                     "positive_average": round(positive_average, 6),
                     "negative_average": round(negative_average, 6),
                     "positive_n": pos_n,
@@ -612,28 +636,44 @@ def column_differentials(
             gene, entrez = parse_gene(row[0])
             all_values = values_at(row, range(1, len(row)))
             all_sum = sum(all_values)
+            all_sum_squares = sum(value * value for value in all_values)
             all_count = len(all_values)
             for key, (pos_indexes, neg_indexes, _) in indexes.items():
                 positive_values = values_at(row, pos_indexes)
+                positive_sum = sum(positive_values)
+                positive_sum_squares = sum(value * value for value in positive_values)
                 if key in eligible_models:
                     negative_values = values_at(row, neg_indexes)
                     negative_sum = sum(negative_values)
+                    negative_sum_squares = sum(value * value for value in negative_values)
                     negative_count = len(negative_values)
                 else:
-                    positive_sum = sum(positive_values)
                     negative_sum = all_sum - positive_sum
+                    negative_sum_squares = all_sum_squares - positive_sum_squares
                     negative_count = all_count - len(positive_values)
                 min_positive_n, min_negative_n = minimums[key]
                 if len(positive_values) < min_positive_n or negative_count < min_negative_n:
                     continue
-                positive_average = sum(positive_values) / len(positive_values)
+                positive_average = positive_sum / len(positive_values)
                 negative_average = negative_sum / negative_count
+                raw_difference = positive_average - negative_average
+                effect_size = hedges_g_from_moments(
+                    positive_sum,
+                    positive_sum_squares,
+                    len(positive_values),
+                    negative_sum,
+                    negative_sum_squares,
+                    negative_count,
+                )
+                if effect_size is None:
+                    continue
                 datasets[key].append(
                     {
                         "gene": gene,
                         "entrez": entrez,
                         "label": row[0],
-                        "score": round(positive_average - negative_average, 6),
+                        "score": round(effect_size, 6),
+                        "raw_difference": round(raw_difference, 6),
                         "positive_average": round(positive_average, 6),
                         "negative_average": round(negative_average, 6),
                         "positive_n": len(positive_values),
@@ -661,6 +701,36 @@ def values_at(row: list[str], indexes) -> list[float]:
     return values
 
 
+def hedges_g_from_moments(
+    positive_sum: float,
+    positive_sum_squares: float,
+    positive_n: int,
+    negative_sum: float,
+    negative_sum_squares: float,
+    negative_n: int,
+) -> float | None:
+    if positive_n < 2 or negative_n < 2:
+        return None
+    positive_average = positive_sum / positive_n
+    negative_average = negative_sum / negative_n
+    positive_variance = max(
+        0.0,
+        (positive_sum_squares - positive_sum * positive_sum / positive_n) / (positive_n - 1),
+    )
+    negative_variance = max(
+        0.0,
+        (negative_sum_squares - negative_sum * negative_sum / negative_n) / (negative_n - 1),
+    )
+    degrees_of_freedom = positive_n + negative_n - 2
+    pooled_variance = (
+        (positive_n - 1) * positive_variance + (negative_n - 1) * negative_variance
+    ) / degrees_of_freedom
+    if pooled_variance <= 1e-12:
+        return 0.0 if abs(positive_average - negative_average) <= 1e-12 else None
+    small_sample_correction = 1.0 - 3.0 / (4.0 * degrees_of_freedom - 1.0)
+    return small_sample_correction * (positive_average - negative_average) / math.sqrt(pooled_variance)
+
+
 def add_ranks(rows: list[dict[str, object]]) -> None:
     rows.sort(key=lambda x: (float(x["score"]), str(x["gene"])))
     for rank, row in enumerate(rows, start=1):
@@ -681,6 +751,7 @@ def compact_rows(rows: list[dict[str, object]]) -> list[list[object]]:
             row["positive_n"],
             row["negative_n"],
             row["rank"],
+            row["raw_difference"],
         ]
         for row in rows
     ]
@@ -1180,6 +1251,7 @@ def main() -> None:
                 "negative_label": definition["negative_label"],
                 "source": definition["source"],
                 "category": definition["category"],
+                "effect_metric": "hedges_g",
                 "positive_models": definition["positive_models"],
                 "data_url": f"/api/dependency-analysis/{analysis_id}",
                 **(
@@ -1200,7 +1272,10 @@ def main() -> None:
 
     payload = {
         "generated_at": datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat(),
-        "comparison": "score = positive-group average dependency - negative-group average dependency",
+        "comparison": (
+            "score = Hedges' g for positive-group versus negative-group dependency; "
+            "negative values indicate greater essentiality in the positive group"
+        ),
         "sources": {
             "crispr": {
                 "release": CRISPR_RELEASE,

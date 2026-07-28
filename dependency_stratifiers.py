@@ -11,6 +11,7 @@ from typing import Any
 
 from scripts.build_hpv_dependency_data import (
     compact_rows,
+    hedges_g_from_moments,
     parse_gene,
 )
 
@@ -146,8 +147,10 @@ def row_pair_differential(matrix_path: str, positive_ids: set[str], negative_ids
         header = next(reader)
         labels = header[1:]
         positive_sums = [0.0] * len(labels)
+        positive_sum_squares = [0.0] * len(labels)
         positive_counts = [0] * len(labels)
         negative_sums = [0.0] * len(labels)
+        negative_sum_squares = [0.0] * len(labels)
         negative_counts = [0] * len(labels)
         positive_rows = []
         negative_rows = []
@@ -157,10 +160,12 @@ def row_pair_differential(matrix_path: str, positive_ids: set[str], negative_ids
                 continue
             if row[0] in positive_ids:
                 sums = positive_sums
+                sum_squares = positive_sum_squares
                 counts = positive_counts
                 positive_rows.append(row[0])
             elif row[0] in negative_ids:
                 sums = negative_sums
+                sum_squares = negative_sum_squares
                 counts = negative_counts
                 negative_rows.append(row[0])
             else:
@@ -170,7 +175,9 @@ def row_pair_differential(matrix_path: str, positive_ids: set[str], negative_ids
                 if value == "" or value.upper() == "NA":
                     continue
                 try:
-                    sums[i] += float(value)
+                    parsed = float(value)
+                    sums[i] += parsed
+                    sum_squares[i] += parsed * parsed
                     counts[i] += 1
                 except ValueError:
                     continue
@@ -183,11 +190,23 @@ def row_pair_differential(matrix_path: str, positive_ids: set[str], negative_ids
             continue
         positive_average = positive_sums[i] / positive_counts[i]
         negative_average = negative_sums[i] / negative_counts[i]
+        raw_difference = positive_average - negative_average
+        effect_size = hedges_g_from_moments(
+            positive_sums[i],
+            positive_sum_squares[i],
+            positive_counts[i],
+            negative_sums[i],
+            negative_sum_squares[i],
+            negative_counts[i],
+        )
+        if effect_size is None:
+            continue
         gene, _ = parse_gene(label)
         rows.append(
             {
                 "gene": gene,
-                "score": round(positive_average - negative_average, 6),
+                "score": round(effect_size, 6),
+                "raw_difference": round(raw_difference, 6),
                 "positive_average": round(positive_average, 6),
                 "negative_average": round(negative_average, 6),
                 "positive_n": positive_counts[i],
@@ -231,13 +250,29 @@ def column_pair_differential(
             negative_values = values_at(row, negative_indexes)
             if len(positive_values) < min_positive_n or len(negative_values) < min_negative_n:
                 continue
-            positive_average = sum(positive_values) / len(positive_values)
-            negative_average = sum(negative_values) / len(negative_values)
+            positive_sum = sum(positive_values)
+            positive_sum_squares = sum(value * value for value in positive_values)
+            negative_sum = sum(negative_values)
+            negative_sum_squares = sum(value * value for value in negative_values)
+            positive_average = positive_sum / len(positive_values)
+            negative_average = negative_sum / len(negative_values)
+            raw_difference = positive_average - negative_average
+            effect_size = hedges_g_from_moments(
+                positive_sum,
+                positive_sum_squares,
+                len(positive_values),
+                negative_sum,
+                negative_sum_squares,
+                len(negative_values),
+            )
+            if effect_size is None:
+                continue
             gene, _ = parse_gene(row[0])
             rows.append(
                 {
                     "gene": gene,
-                    "score": round(positive_average - negative_average, 6),
+                    "score": round(effect_size, 6),
+                    "raw_difference": round(raw_difference, 6),
                     "positive_average": round(positive_average, 6),
                     "negative_average": round(negative_average, 6),
                     "positive_n": len(positive_values),
@@ -254,9 +289,7 @@ def column_pair_differential(
 
 
 def min_values_for_group(group_size: int) -> int:
-    if group_size <= 0:
-        return 1
-    return min(group_size, max(MIN_GROUP_VALUES, math.ceil(group_size * MIN_GROUP_COVERAGE)))
+    return max(MIN_GROUP_VALUES, math.ceil(max(0, group_size) * MIN_GROUP_COVERAGE))
 
 
 def choose_models(model_rows: list[dict[str, str]], spec: dict[str, Any]) -> set[str]:
@@ -641,10 +674,10 @@ def compute_stratifier(prompt: str) -> tuple[dict[str, Any], dict[str, Any], dic
         }
         cohort_method = "depmap_metadata"
 
-    if len(positive_ids) < 2 or len(negative_ids) < 2:
+    if len(positive_ids) < MIN_GROUP_VALUES or len(negative_ids) < MIN_GROUP_VALUES:
         raise ValueError(
             f"The selected dataset mapped only {len(positive_ids)} positive models and "
-            f"{len(negative_ids)} negative models; at least two are required on each side."
+            f"{len(negative_ids)} negative models; at least {MIN_GROUP_VALUES} are required on each side."
         )
 
     model_to_ccle = {row["ModelID"]: row["CCLEName"] for row in model_rows if row["CCLEName"]}
@@ -661,6 +694,7 @@ def compute_stratifier(prompt: str) -> tuple[dict[str, Any], dict[str, Any], dic
         "positive_label": spec["positive_label"],
         "negative_label": spec["negative_label"],
         "source": f'{dataset["name"]} ({dataset["provider"]})',
+        "effect_metric": "hedges_g",
         "positive_models": model_payload(model_rows, positive_ids),
         "negative_models": model_payload(model_rows, negative_ids),
         "datasets": {
