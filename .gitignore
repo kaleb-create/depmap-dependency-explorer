@@ -4,6 +4,8 @@ app.db
 .venv/
 data/*.csv
 data/stratifier_sources/
+data/.runtime-data.lock
+data/.runtime-data.json
 node_modules
 Secretome
 outputs/

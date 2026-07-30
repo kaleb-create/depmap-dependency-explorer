@@ -14,6 +14,7 @@ from scripts.build_hpv_dependency_data import (
     hedges_g_from_moments,
     parse_gene,
 )
+from runtime_data import ensure_depmap_runtime_data
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -75,7 +76,9 @@ class PublicRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def load_model_rows() -> list[dict[str, str]]:
     if not os.path.exists(MODEL_PATH):
-        raise FileNotFoundError(f"Missing DepMap Model.csv at {MODEL_PATH}. Set DEPMAP_DATA_DIR to the raw DepMap CSV directory.")
+        ensure_depmap_runtime_data()
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(f"Missing DepMap Model.csv at {MODEL_PATH}.")
 
     with open(MODEL_PATH, newline="") as f:
         return list(csv.DictReader(f))
@@ -638,6 +641,9 @@ def model_payload(model_rows: list[dict[str, str]], model_ids: set[str], quality
 
 
 def compute_stratifier(prompt: str) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    runtime_status = ensure_depmap_runtime_data()
+    crispr_release = runtime_status["files"]["CRISPRGeneEffect.csv"]["release"]
+    rnai_release = runtime_status["files"]["D2_combined_gene_dep_scores.csv"]["release"]
     model_rows = load_model_rows()
     spec = request_openai_spec(prompt, available_taxonomy(model_rows))
     dataset = spec["dataset"]
@@ -693,7 +699,10 @@ def compute_stratifier(prompt: str) -> tuple[dict[str, Any], dict[str, Any], dic
         "label": spec["label"],
         "positive_label": spec["positive_label"],
         "negative_label": spec["negative_label"],
-        "source": f'{dataset["name"]} ({dataset["provider"]})',
+        "source": (
+            f'{dataset["name"]} ({dataset["provider"]}); dependencies from '
+            f"{crispr_release} and {rnai_release}"
+        ),
         "effect_metric": "hedges_g",
         "positive_models": model_payload(model_rows, positive_ids),
         "negative_models": model_payload(model_rows, negative_ids),
@@ -715,6 +724,10 @@ def compute_stratifier(prompt: str) -> tuple[dict[str, Any], dict[str, Any], dic
         "retrieval": retrieval_for_source,
         "mapping": mapping,
         "cohort_method": cohort_method,
+        "dependency_releases": {
+            "crispr": crispr_release,
+            "rnai": rnai_release,
+        },
         "web_sources": spec.pop("_web_sources", []),
         "spec": spec,
         "positive_model_ids": sorted(positive_ids),

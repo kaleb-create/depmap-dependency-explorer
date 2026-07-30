@@ -29,6 +29,7 @@ DEPMAP_DATA_DIR=/var/data/depmap
 STRATIFIER_DATASET_DIR=/var/data/stratifier_sources
 MAX_STRATIFIER_DATASET_BYTES=26214400
 MAX_STRATIFIER_DATASET_ROWS=250000
+GUNICORN_TIMEOUT=300
 ```
 
 `AUTH_ENABLED=false` runs the explorer without login or registration. Set it to
@@ -48,6 +49,14 @@ contain the raw DepMap CSVs used to compute new stratifiers:
 - `D2_combined_gene_dep_scores.csv`
 - `Model.csv`
 
+On startup, `wsgi.py` checks for the three raw DepMap files and downloads any
+missing inputs from immutable official Figshare release URLs before Gunicorn
+accepts traffic. The runtime inputs are DepMap Public 24Q4 Model/CRISPR data and
+DEMETER2 Data v6 siRNA data, with fixed checksum validation. Without a
+persistent disk this cache is rebuilt after every deploy or restart. A disk
+mounted at `/var/data` with `DEPMAP_DATA_DIR=/var/data/depmap` avoids repeat
+downloads.
+
 `STRATIFIER_DATASET_DIR` stores the source tables selected by ChatGPT web
 search. Keep it on persistent storage so saved provenance remains auditable
 across redeploys. Downloads are restricted to public HTTP(S) addresses and to
@@ -55,7 +64,8 @@ the configured byte and row limits.
 
 ## Populating DepMap Data
 
-On a host with `DEPMAP_DATA_DIR` pointing at a persistent disk, run:
+Runtime provisioning only downloads the three inputs needed for custom
+stratifiers. To refresh every built-in analysis from all upstream sources, run:
 
 ```bash
 python3 scripts/build_hpv_dependency_data.py

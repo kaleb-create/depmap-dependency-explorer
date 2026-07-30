@@ -21,6 +21,7 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from dependency_stratifiers import MODEL_PATH, compute_stratifier
+from runtime_data import runtime_data_status
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -581,10 +582,22 @@ def dependency_analysis(analysis_id: str):
         return json.load(f)
 
 
+@app.route("/api/stratifier-readiness")
+@login_required
+def stratifier_readiness():
+    status = runtime_data_status()
+    return {
+        "ready": status["ready"],
+        "files": status["files"],
+        "openai_ready": bool(os.environ.get("OPENAI_API_KEY")),
+    }
+
+
 @app.route("/stratifiers")
 @login_required
 @roles_required("forecaster", "admin")
 def manage_stratifiers():
+    depmap_ready = runtime_data_status()["ready"]
     rows = []
     for row in fetch_custom_stratifiers():
         analysis = json.loads(row["analysis_json"])
@@ -607,6 +620,7 @@ def manage_stratifiers():
         stratifiers=rows,
         openai_ready=bool(os.environ.get("OPENAI_API_KEY")),
         openai_model=os.environ.get("OPENAI_MODEL", "gpt-5.5"),
+        depmap_ready=depmap_ready,
     )
 
 

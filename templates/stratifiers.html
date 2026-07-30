@@ -19,6 +19,10 @@
       <strong>{{ 'ChatGPT connected' if openai_ready else 'ChatGPT API key required' }}</strong>
       <span>{{ openai_model if openai_ready else 'Set OPENAI_API_KEY on the server to enable dataset search.' }}</span>
     </div>
+    <div class="api-status {{ 'api-status-ready' if depmap_ready else 'api-status-missing' }}">
+      <strong>{{ 'DepMap matrices ready' if depmap_ready else 'DepMap matrices unavailable' }}</strong>
+      <span>{{ 'CRISPR, siRNA, and model metadata are ready for analysis.' if depmap_ready else 'The server must finish provisioning raw DepMap data.' }}</span>
+    </div>
   </div>
   <form method="post" action="{{ url_for('create_stratifier') }}" class="stratifier-form">
     <label for="prompt">Cell-line difference</label>
@@ -29,7 +33,7 @@
       placeholder="KRAS mutant lung adenocarcinoma vs KRAS wild-type lung adenocarcinoma"
       required
     ></textarea>
-    <button class="btn-primary" type="submit" {% if not openai_ready %}disabled{% endif %}>Find dataset and build</button>
+    <button class="btn-primary" type="submit" {% if not openai_ready or not depmap_ready %}disabled{% endif %}>Find dataset and build</button>
   </form>
 </section>
 
