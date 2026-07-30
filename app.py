@@ -21,7 +21,7 @@ from flask import (
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from dependency_stratifiers import MODEL_PATH, compute_stratifier
-from runtime_data import runtime_data_status
+from runtime_data import ensure_depmap_runtime_data, runtime_data_status
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -33,6 +33,10 @@ DEPENDENCY_ANALYSIS_DIR = os.path.join(BASE_DIR, "static", "data", "dependency_a
 UTC = timezone.utc
 MIN_DEPENDENCY_GROUP_VALUES = 3
 MIN_DEPENDENCY_GROUP_COVERAGE = 0.5
+
+
+if os.environ.get("DEPMAP_PROVISION_ON_START", "true").lower() == "true":
+    ensure_depmap_runtime_data()
 
 
 app = Flask(__name__)

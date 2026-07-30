@@ -30,6 +30,7 @@ STRATIFIER_DATASET_DIR=/var/data/stratifier_sources
 MAX_STRATIFIER_DATASET_BYTES=26214400
 MAX_STRATIFIER_DATASET_ROWS=250000
 GUNICORN_TIMEOUT=300
+DEPMAP_PROVISION_ON_START=true
 ```
 
 `AUTH_ENABLED=false` runs the explorer without login or registration. Set it to
