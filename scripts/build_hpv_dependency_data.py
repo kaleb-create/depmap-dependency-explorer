@@ -15,6 +15,7 @@ STATIC_DATA_DIR = os.environ.get("DEPMAP_STATIC_DATA_DIR", os.path.join(BASE_DIR
 FILE_INDEX = os.path.join(DATA_DIR, "depmap_files.csv")
 SUMMARY_JSON = os.path.join(STATIC_DATA_DIR, "hpv_dependency_summary.json")
 ANALYSIS_DATA_DIR = os.path.join(STATIC_DATA_DIR, "dependency_analyses")
+HBV_HCC_ANNOTATION_PATH = os.path.join(BASE_DIR, "annotations", "hbv_hcc_status.csv")
 
 DOWNLOAD_INDEX_URL = "https://depmap.org/portal/api/download/files"
 CELLOSAURUS_SEARCH_URL = "https://api.cellosaurus.org/search/cell-line"
@@ -151,6 +152,49 @@ def fetch_hpv_transformants() -> dict[str, list[str]]:
             if primary_accession:
                 accessions[primary_accession] = labels
     return accessions
+
+
+def load_hbv_hcc_annotations(
+    model_info: dict[str, dict[str, str]],
+) -> tuple[dict[str, set[str]], dict[str, dict[str, object]]]:
+    groups = {"positive": set(), "negative": set(), "unknown": set()}
+    extras: dict[str, dict[str, object]] = {}
+    seen: set[str] = set()
+
+    with open(HBV_HCC_ANNOTATION_PATH, newline="") as f:
+        for row in csv.DictReader(f):
+            model_id = row["ModelID"]
+            status = row["HBVStatus"].strip().lower()
+            if model_id in seen:
+                raise RuntimeError(f"Duplicate HBV HCC annotation for {model_id}")
+            if model_id not in model_info:
+                raise RuntimeError(f"HBV HCC annotation references unknown DepMap model {model_id}")
+            if status not in groups:
+                raise RuntimeError(f"Invalid HBV HCC status {status!r} for {model_id}")
+            if model_info[model_id]["disease"] != "Hepatocellular Carcinoma":
+                raise RuntimeError(f"HBV HCC annotation references a non-HCC model: {model_id}")
+
+            seen.add(model_id)
+            groups[status].add(model_id)
+            extras[model_id] = {
+                "grouping_note": row["Evidence"],
+                "hbv_status": status,
+                "evidence_strength": row["EvidenceStrength"],
+                "evidence_source": row["SourceURL"],
+            }
+
+    hcc_models = {
+        model_id
+        for model_id, info in model_info.items()
+        if info["disease"] == "Hepatocellular Carcinoma"
+    }
+    missing = hcc_models - seen
+    if missing:
+        raise RuntimeError(
+            "HBV HCC annotations are incomplete for current DepMap HCC models: "
+            + ", ".join(sorted(missing))
+        )
+    return groups, extras
 
 
 def is_driver_mutation(row: dict[str, str]) -> bool:
@@ -805,6 +849,7 @@ def main() -> None:
         for model_id, info in model_info.items()
         if info["cellosaurus"] in hpv_transformants
     }
+    hbv_hcc_groups, hbv_hcc_extras = load_hbv_hcc_annotations(model_info)
 
     mutation_sets, top_driver_genes, mutations_by_gene, likely_biallelic_lof = mutation_groups(
         local_paths["mutations"]
@@ -834,6 +879,7 @@ def main() -> None:
         prevalence_models: set[str] | None = None,
         prevalence_denominator: str = "all DepMap cancer models",
         extra: dict[str, object] | None = None,
+        negative_models: set[str] | None = None,
         prevalence_rank: int | None = None,
     ) -> None:
         positives = set(positive_models) & all_models
@@ -861,6 +907,12 @@ def main() -> None:
             "prevalence_total": len(denominator),
             "prevalence_denominator": prevalence_denominator,
         }
+        if negative_models is not None:
+            definition["negative_models"] = analysis_models(
+                model_info,
+                set(negative_models) & all_models,
+                extra,
+            )
         if eligible is not None:
             definition["eligible_model_ids"] = eligible
         if prevalence_rank is not None:
@@ -876,6 +928,24 @@ def main() -> None:
         "Viral and expression-defined states",
         hpv_models,
         extra=hpv_extra,
+    )
+    add_analysis(
+        "hbv_hcc",
+        "HBV-associated HCC vs HBV-negative HCC",
+        "HBV-associated HCC",
+        "HBV-negative HCC",
+        (
+            "Curated HBV DNA, integration, HBsAg and viral-screen evidence from "
+            "Fujise et al. 1990, Chen et al. 2015, Uphoff et al. 2018, "
+            "Ramirez et al. 2021 and Zaiets et al. 2025"
+        ),
+        "Viral and expression-defined states",
+        hbv_hcc_groups["positive"],
+        eligible_models=hbv_hcc_groups["positive"] | hbv_hcc_groups["negative"],
+        prevalence_models=hbv_hcc_groups["positive"] | hbv_hcc_groups["negative"],
+        prevalence_denominator="curated HCC models with classified HBV status",
+        extra=hbv_hcc_extras,
+        negative_models=hbv_hcc_groups["negative"],
     )
     add_analysis(
         "msi_high",
@@ -1253,6 +1323,11 @@ def main() -> None:
                 "category": definition["category"],
                 "effect_metric": "hedges_g",
                 "positive_models": definition["positive_models"],
+                **(
+                    {"negative_models": definition["negative_models"]}
+                    if definition.get("negative_models") is not None
+                    else {}
+                ),
                 "data_url": f"/api/dependency-analysis/{analysis_id}",
                 **(
                     {"prevalence_rank": definition["prevalence_rank"]}

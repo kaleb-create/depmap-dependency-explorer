@@ -324,7 +324,14 @@ function renderMeta() {
   const crisprCounts = activeAnalysis.included_models.crispr;
   const rnaiCounts = activeAnalysis.included_models.rnai;
   const positiveModels = activeAnalysis.positive_models || [];
+  const negativeModels = activeAnalysis.negative_models || [];
   const modelRows = positiveModels
+    .map((m) => {
+      const note = m.grouping_note ? ` - ${escapeHtml(m.grouping_note)}` : "";
+      return `<li>${escapeHtml(m.cell_line)} <span class="muted">(${escapeHtml(m.model_id)}; ${escapeHtml(m.disease || "unknown disease")}${note})</span></li>`;
+    })
+    .join("");
+  const negativeModelRows = negativeModels
     .map((m) => {
       const note = m.grouping_note ? ` - ${escapeHtml(m.grouping_note)}` : "";
       return `<li>${escapeHtml(m.cell_line)} <span class="muted">(${escapeHtml(m.model_id)}; ${escapeHtml(m.disease || "unknown disease")}${note})</span></li>`;
@@ -344,6 +351,12 @@ function renderMeta() {
       <summary>${positiveModels.length.toLocaleString()} positive-group DepMap models</summary>
       <ul>${modelRows || "<li>No positive models matched this analysis.</li>"}</ul>
     </details>
+    ${negativeModels.length ? `
+      <details class="model-details">
+        <summary>${negativeModels.length.toLocaleString()} negative-group DepMap models</summary>
+        <ul>${negativeModelRows}</ul>
+      </details>
+    ` : ""}
   `;
 }
 
