@@ -465,6 +465,7 @@ def expression_state_groups(
 def fusion_groups(fusion_path: str) -> dict[str, set[str]]:
     groups = {
         "bcr_abl": set(),
+        "runx1_eto_fusion": set(),
         "alk": set(),
         "ret_fusion": set(),
         "ros1_fusion": set(),
@@ -485,6 +486,8 @@ def fusion_groups(fusion_path: str) -> dict[str, set[str]]:
             }
             if {"BCR", "ABL1"} <= genes:
                 groups["bcr_abl"].add(model_id)
+            if {"RUNX1", "RUNX1T1"} <= genes:
+                groups["runx1_eto_fusion"].add(model_id)
             if "ALK" in genes:
                 groups["alk"].add(model_id)
             if "RET" in genes:
@@ -508,8 +511,10 @@ def row_differentials(
     matrix_path: str,
     analyses: dict[str, set[str]],
     eligible_models: dict[str, set[str]] | None = None,
+    minimum_positive_values: dict[str, int] | None = None,
 ) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
     eligible_models = eligible_models or {}
+    minimum_positive_values = minimum_positive_values or {}
     sums = {key: None for key in analyses}
     sum_squares = {key: None for key in analyses}
     counts = {key: None for key in analyses}
@@ -589,7 +594,10 @@ def row_differentials(
         )
         analysis_counts = eligible_counts[key] if key in eligible_models else total_counts
         negative_row_count = analysis_row_count - len(positive_rows[key])
-        min_positive_n = min_values_for_group(len(positive_rows[key]))
+        min_positive_n = max(
+            minimum_positive_values.get(key, MIN_GROUP_VALUES),
+            math.ceil(len(positive_rows[key]) * MIN_GROUP_COVERAGE),
+        )
         min_negative_n = min_values_for_group(negative_row_count)
         for i, label in enumerate(labels):
             pos_n = counts[key][i]
@@ -631,7 +639,10 @@ def row_differentials(
         key: {
             "positive": sorted(positive_rows[key]),
             "negative_n": (eligible_rows[key] if key in eligible_models else total_rows) - len(positive_rows[key]),
-            "min_positive_n": min_values_for_group(len(positive_rows[key])),
+            "min_positive_n": max(
+                minimum_positive_values.get(key, MIN_GROUP_VALUES),
+                math.ceil(len(positive_rows[key]) * MIN_GROUP_COVERAGE),
+            ),
             "min_negative_n": min_values_for_group(
                 (eligible_rows[key] if key in eligible_models else total_rows) - len(positive_rows[key])
             ),
@@ -645,8 +656,10 @@ def column_differentials(
     matrix_path: str,
     analyses: dict[str, set[str]],
     eligible_models: dict[str, set[str]] | None = None,
+    minimum_positive_values: dict[str, int] | None = None,
 ) -> tuple[dict[str, list[dict[str, object]]], dict[str, dict[str, object]]]:
     eligible_models = eligible_models or {}
+    minimum_positive_values = minimum_positive_values or {}
     datasets: dict[str, list[dict[str, object]]] = {key: [] for key in analyses}
     included: dict[str, dict[str, object]] = {}
 
@@ -668,7 +681,13 @@ def column_differentials(
                 else:
                     neg_indexes.append(i)
             indexes[key] = (pos_indexes, neg_indexes, pos_columns)
-            minimums[key] = (min_values_for_group(len(pos_indexes)), min_values_for_group(len(neg_indexes)))
+            minimums[key] = (
+                max(
+                    minimum_positive_values.get(key, MIN_GROUP_VALUES),
+                    math.ceil(len(pos_indexes) * MIN_GROUP_COVERAGE),
+                ),
+                min_values_for_group(len(neg_indexes)),
+            )
             included[key] = {
                 "positive": sorted(pos_columns),
                 "negative_n": len(neg_indexes),
@@ -881,15 +900,16 @@ def main() -> None:
         extra: dict[str, object] | None = None,
         negative_models: set[str] | None = None,
         prevalence_rank: int | None = None,
+        minimum_positive_values: int = MIN_GROUP_VALUES,
     ) -> None:
         positives = set(positive_models) & all_models
         eligible = set(eligible_models) & all_models if eligible_models is not None else None
         if eligible is not None:
             positives &= eligible
-        if len(positives) < MIN_GROUP_VALUES:
+        if len(positives) < minimum_positive_values:
             print(
                 f"Skipping {label}: {len(positives)} positive models is below "
-                f"the minimum cohort size of {MIN_GROUP_VALUES}"
+                f"the minimum cohort size of {minimum_positive_values}"
             )
             return
         denominator = set(prevalence_models) & all_models if prevalence_models is not None else (
@@ -906,6 +926,7 @@ def main() -> None:
             "positive_models": analysis_models(model_info, positives, extra),
             "prevalence_total": len(denominator),
             "prevalence_denominator": prevalence_denominator,
+            "minimum_positive_values": minimum_positive_values,
         }
         if negative_models is not None:
             definition["negative_models"] = analysis_models(
@@ -1233,6 +1254,11 @@ def main() -> None:
     mutation_sets["alk"] = mutation_sets["alk"] | fusion_sets["alk"]
     fusion_definitions = [
         ("bcr_abl", "BCR-ABL1 fusion", fusion_sets["bcr_abl"]),
+        (
+            "runx1_eto_fusion",
+            "RUNX1::RUNX1T1 (RUNX1-ETO) fusion",
+            fusion_sets["runx1_eto_fusion"],
+        ),
         ("alk", "ALK alteration", mutation_sets["alk"]),
         ("ret_fusion", "RET fusion", fusion_sets["ret_fusion"]),
         ("ros1_fusion", "ROS1 fusion", fusion_sets["ros1_fusion"]),
@@ -1243,14 +1269,23 @@ def main() -> None:
         ("fgfr_fusion", "FGFR1/2/3 fusion", fusion_sets["fgfr_fusion"]),
     ]
     for analysis_id, name, positives in fusion_definitions:
+        is_runx1_eto = analysis_id == "runx1_eto_fusion"
         add_analysis(
             analysis_id,
             f"{name} vs alteration-negative",
             name,
             f"{name} negative",
-            "DepMap OmicsFusionFiltered.csv" if analysis_id != "alk" else "DepMap ALK driver mutations plus ALK fusions",
+            (
+                "DepMap OmicsFusionFiltered.csv; exploratory two-model cohort requiring "
+                "both positive models per gene"
+                if is_runx1_eto
+                else "DepMap OmicsFusionFiltered.csv"
+                if analysis_id != "alk"
+                else "DepMap ALK driver mutations plus ALK fusions"
+            ),
             "Oncogenic fusions",
             positives,
+            minimum_positive_values=2 if is_runx1_eto else MIN_GROUP_VALUES,
         )
 
     for rank, gene in enumerate(top_driver_genes, start=1):
@@ -1292,9 +1327,24 @@ def main() -> None:
         for d in analysis_defs
         if d.get("eligible_model_ids") is not None
     }
+    minimum_positive_values = {
+        d["id"]: int(d["minimum_positive_values"])
+        for d in analysis_defs
+        if int(d["minimum_positive_values"]) != MIN_GROUP_VALUES
+    }
 
-    crispr, crispr_included = row_differentials(local_paths["crispr"], crispr_groups, crispr_eligible)
-    rnai, rnai_included = column_differentials(local_paths["rnai"], rnai_groups, rnai_eligible)
+    crispr, crispr_included = row_differentials(
+        local_paths["crispr"],
+        crispr_groups,
+        crispr_eligible,
+        minimum_positive_values,
+    )
+    rnai, rnai_included = column_differentials(
+        local_paths["rnai"],
+        rnai_groups,
+        rnai_eligible,
+        minimum_positive_values,
+    )
 
     analyses = []
     analysis_counts = {}
