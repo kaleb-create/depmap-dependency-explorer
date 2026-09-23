@@ -120,6 +120,38 @@ def model_lookup(model_path: str) -> dict[str, dict[str, str]]:
     return lookup
 
 
+def lineage_analysis_specs(model_info: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+    cancer_models = {
+        model_id
+        for model_id, info in model_info.items()
+        if info["lineage"] and info["disease"] and info["disease"] != "Non-Cancerous"
+    }
+    return [
+        {
+            "analysis_id": analysis_id,
+            "label": f"{name} vs other cancers",
+            "positive_label": name,
+            "negative_label": "Other cancers",
+            "source": (
+                f"{CRISPR_RELEASE} Model.csv; OncotreeLineage = {lineage}; "
+                "non-cancerous and unclassified models excluded"
+            ),
+            "category": "Tissue lineages",
+            "positive_models": {
+                model_id
+                for model_id in cancer_models
+                if model_info[model_id]["lineage"] == lineage
+            },
+            "eligible_models": cancer_models,
+            "prevalence_denominator": "DepMap cancer models with an annotated tissue lineage",
+        }
+        for analysis_id, name, lineage in (
+            ("kidney", "Kidney", "Kidney"),
+            ("ovarian", "Ovarian", "Ovary/Fallopian Tube"),
+        )
+    ]
+
+
 def fetch_hpv_transformants() -> dict[str, list[str]]:
     ctx = ssl._create_unverified_context()
     accessions: dict[str, list[str]] = {}
@@ -968,6 +1000,8 @@ def main() -> None:
         extra=hbv_hcc_extras,
         negative_models=hbv_hcc_groups["negative"],
     )
+    for lineage_spec in lineage_analysis_specs(model_info):
+        add_analysis(**lineage_spec)
     add_analysis(
         "msi_high",
         "MSI-high vs microsatellite stable",
