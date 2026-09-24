@@ -1178,6 +1178,7 @@ def main() -> None:
         ("rb1_loss", "RB1"),
         ("smad4_loss", "SMAD4"),
         ("nf1_loss", "NF1"),
+        ("keap1_loss", "KEAP1"),
     ]:
         add_analysis(
             analysis_id,

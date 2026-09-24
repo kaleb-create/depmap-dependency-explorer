@@ -387,8 +387,72 @@ input[type='range'] {
   margin-bottom: 16px;
 }
 
-.explorer-controls > label {
+.explorer-controls > label,
+.gene-search-control {
   align-self: start;
+}
+
+.gene-search-control {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.gene-search-field {
+  position: relative;
+}
+
+.gene-suggestions {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  left: 0;
+  z-index: 15;
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid #cfc7a8;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 12px 24px rgba(17, 17, 17, 0.16);
+}
+
+.gene-suggestion {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid #eee9d8;
+  padding: 9px 11px;
+  background: #fff;
+  color: var(--ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-align: left;
+}
+
+.gene-suggestion:last-child {
+  border-bottom: 0;
+}
+
+.gene-suggestion:hover,
+.gene-suggestion:focus-visible {
+  background: #fff6bf;
+  outline: none;
+}
+
+.gene-suggestion span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.gene-suggestion-empty {
+  padding: 10px 11px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .cutoff-control {

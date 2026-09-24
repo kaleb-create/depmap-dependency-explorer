@@ -17,18 +17,23 @@
   <label for="analysis-select">Analysis
     <select id="analysis-select"></select>
   </label>
-  <label for="gene-search">Gene search
-    <input
-      id="gene-search"
-      type="search"
-      list="gene-options"
-      placeholder="Search TP53, E6AP, MYC..."
-      autocomplete="off"
-      aria-describedby="gene-search-help"
-    />
-    <datalist id="gene-options"></datalist>
-    <span id="gene-search-help" class="small-line">Select an exact gene to highlight one protein across both charts.</span>
-  </label>
+  <div class="gene-search-control">
+    <label for="gene-search">Gene search</label>
+    <div class="gene-search-field">
+      <input
+        id="gene-search"
+        type="search"
+        placeholder="Search TP53, E6AP, MYC..."
+        autocomplete="off"
+        aria-autocomplete="list"
+        aria-controls="gene-suggestions"
+        aria-expanded="false"
+        aria-describedby="gene-search-help"
+      />
+      <div id="gene-suggestions" class="gene-suggestions hidden" role="listbox"></div>
+    </div>
+    <span id="gene-search-help" class="small-line">Case, punctuation, spacing, common aliases, and minor misspellings are supported. Select one result to highlight it across both charts.</span>
+  </div>
   <fieldset class="cutoff-control">
     <label for="negative-display-mode">Negative cohort display
       <select id="negative-display-mode">

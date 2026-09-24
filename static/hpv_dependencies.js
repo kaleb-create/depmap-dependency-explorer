@@ -19,7 +19,8 @@ const charts = {
 
 const analysisSelect = document.getElementById("analysis-select");
 const searchInput = document.getElementById("gene-search");
-const geneOptions = document.getElementById("gene-options");
+const geneSearchControl = document.querySelector(".gene-search-control");
+const geneSuggestions = document.getElementById("gene-suggestions");
 const negativeDisplayMode = document.getElementById("negative-display-mode");
 const cutoffInput = document.getElementById("negative-cutoff");
 const cutoffValue = document.getElementById("negative-cutoff-value");
@@ -34,8 +35,19 @@ let summary = null;
 let activeAnalysis = null;
 let activeGene = "";
 let geneQuery = "";
+let searchableGenes = [];
+let searchableGeneLookup = new Map();
 let analysisLoadToken = 0;
 let negativeEssentialityCutoff = Number(cutoffInput.value);
+
+const GENE_ALIASES = new Map([
+  ["E6AP", "UBE3A"],
+  ["HER2", "ERBB2"],
+  ["P53", "TP53"],
+  ["P16", "CDKN2A"],
+  ["P21", "CDKN1A"],
+  ["NRF2", "NFE2L2"],
+]);
 
 function escapeHtml(value) {
   return String(value || "")
@@ -82,6 +94,108 @@ function formatPair(entry) {
     return "";
   }
   return `${formatScore(entry.positive_average)} / ${formatScore(entry.negative_average)}`;
+}
+
+function normalizeGeneTerm(value) {
+  return String(value || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+}
+
+function resolvedGeneQuery(value) {
+  const normalized = normalizeGeneTerm(value);
+  return GENE_ALIASES.get(normalized) || normalized;
+}
+
+function editDistance(left, right) {
+  const rows = Array.from({ length: left.length + 1 }, () => Array(right.length + 1).fill(0));
+  for (let i = 0; i <= left.length; i += 1) {
+    rows[i][0] = i;
+  }
+  for (let j = 0; j <= right.length; j += 1) {
+    rows[0][j] = j;
+  }
+  for (let i = 1; i <= left.length; i += 1) {
+    for (let j = 1; j <= right.length; j += 1) {
+      const substitution = left[i - 1] === right[j - 1] ? 0 : 1;
+      rows[i][j] = Math.min(
+        rows[i - 1][j] + 1,
+        rows[i][j - 1] + 1,
+        rows[i - 1][j - 1] + substitution
+      );
+      if (
+        i > 1
+        && j > 1
+        && left[i - 1] === right[j - 2]
+        && left[i - 2] === right[j - 1]
+      ) {
+        rows[i][j] = Math.min(rows[i][j], rows[i - 2][j - 2] + 1);
+      }
+    }
+  }
+  return rows[left.length][right.length];
+}
+
+function geneMatchScore(gene, value) {
+  const query = resolvedGeneQuery(value);
+  const normalizedGene = normalizeGeneTerm(gene);
+  if (!query) {
+    return null;
+  }
+  if (normalizedGene === query) {
+    return 0;
+  }
+  if (normalizedGene.startsWith(query)) {
+    return 10 + normalizedGene.length - query.length;
+  }
+  const containedAt = query.length >= 2 ? normalizedGene.indexOf(query) : -1;
+  if (containedAt >= 0) {
+    return 20 + containedAt + normalizedGene.length - query.length;
+  }
+  if (query.length < 3) {
+    return null;
+  }
+  const maxDistance = query.length <= 5 ? 1 : query.length <= 9 ? 2 : 3;
+  if (Math.abs(normalizedGene.length - query.length) > maxDistance) {
+    return null;
+  }
+  const distance = editDistance(normalizedGene, query);
+  if (distance > maxDistance || distance / query.length > 0.34) {
+    return null;
+  }
+  return 40 + distance * 10 + Math.abs(normalizedGene.length - query.length);
+}
+
+function findGeneMatches(value, limit = 50, candidates = searchableGenes) {
+  return candidates
+    .map((gene) => ({ gene, score: geneMatchScore(gene, value) }))
+    .filter((match) => match.score !== null)
+    .sort((left, right) => left.score - right.score || left.gene.length - right.gene.length || left.gene.localeCompare(right.gene))
+    .slice(0, limit);
+}
+
+function hideGeneSuggestions() {
+  geneSuggestions.classList.add("hidden");
+  searchInput.setAttribute("aria-expanded", "false");
+}
+
+function renderGeneSuggestions() {
+  if (activeGene || resolvedGeneQuery(geneQuery).length < 2) {
+    hideGeneSuggestions();
+    return;
+  }
+  const matches = findGeneMatches(geneQuery, 8);
+  geneSuggestions.innerHTML = matches.length
+    ? matches.map((match, index) => `
+        <button class="gene-suggestion" type="button" role="option" data-gene="${escapeHtml(match.gene)}">
+          ${escapeHtml(match.gene)}${index === 0 && match.score >= 40 ? "<span>Closest match</span>" : ""}
+        </button>
+      `).join("")
+    : '<div class="gene-suggestion-empty">No close gene matches. Try fewer letters.</div>';
+  geneSuggestions.classList.remove("hidden");
+  searchInput.setAttribute("aria-expanded", "true");
 }
 
 function visibleRows(key) {
@@ -387,10 +501,12 @@ function renderResults() {
   const rnai = new Map(visibleRows("rnai").map((d) => [d.gene, d]));
   const crispr = new Map(visibleRows("crispr").map((d) => [d.gene, d]));
   const genes = new Set([...rnai.keys(), ...crispr.keys()]);
-  const rows = [...genes]
-    .filter((gene) => (geneQuery ? gene.toLowerCase().includes(geneQuery.toLowerCase()) : false))
-    .sort()
-    .slice(0, 50)
+  const visibleGenes = new Set(genes);
+  const matchedGenes = activeGene
+    ? [activeGene]
+    : findGeneMatches(geneQuery, 50, [...genes]).map((match) => match.gene);
+  const rows = matchedGenes
+    .filter((gene) => visibleGenes.has(gene))
     .map((gene) => {
       const r = rnai.get(gene);
       const c = crispr.get(gene);
@@ -410,7 +526,7 @@ function renderResults() {
 
   resultBody.innerHTML = rows.length
     ? rows.join("")
-    : `<tr><td colspan="7" class="muted">${geneQuery && negativeDisplayMode.value === "cutoff" ? "No matched genes pass the active negative-cohort cutoff." : "Search for a gene, then select an exact symbol to highlight it."}</td></tr>`;
+    : `<tr><td colspan="7" class="muted">${geneQuery && negativeDisplayMode.value === "cutoff" ? "No close gene matches pass the active negative-cohort cutoff." : "Search for a gene, then select one result to highlight it."}</td></tr>`;
 }
 
 function renderAll() {
@@ -439,15 +555,13 @@ function populateAnalyses() {
     .join("");
 }
 
-function populateGeneOptions() {
+function populateSearchableGenes() {
   const genes = new Set([
     ...activeAnalysis.datasets.crispr.map((row) => row.gene),
     ...activeAnalysis.datasets.rnai.map((row) => row.gene),
   ]);
-  geneOptions.innerHTML = [...genes]
-    .sort()
-    .map((gene) => `<option value="${escapeHtml(gene)}"></option>`)
-    .join("");
+  searchableGenes = [...genes].sort();
+  searchableGeneLookup = new Map(searchableGenes.map((gene) => [normalizeGeneTerm(gene), gene]));
 }
 
 function selectExactGene(value) {
@@ -457,16 +571,11 @@ function selectExactGene(value) {
     activeGene = "";
     return;
   }
-  const genes = new Map(
-    [
-      ...activeAnalysis.datasets.crispr,
-      ...activeAnalysis.datasets.rnai,
-    ].map((row) => [row.gene.toLowerCase(), row.gene])
-  );
-  activeGene = genes.get(query.toLowerCase()) || "";
+  activeGene = searchableGeneLookup.get(resolvedGeneQuery(query)) || "";
   if (activeGene) {
     geneQuery = activeGene;
     searchInput.value = activeGene;
+    hideGeneSuggestions();
   }
 }
 
@@ -493,9 +602,10 @@ async function setAnalysis(analysisId) {
   if (token !== analysisLoadToken) {
     return;
   }
-  populateGeneOptions();
+  populateSearchableGenes();
   selectExactGene(searchInput.value);
   renderAll();
+  renderGeneSuggestions();
 }
 
 function nearestPoint(chart, x, y) {
@@ -579,9 +689,53 @@ analysisSelect.addEventListener("change", async (event) => {
 });
 
 searchInput.addEventListener("input", (event) => {
+  const previousGene = activeGene;
   selectExactGene(event.target.value);
   if (summary && activeAnalysis && activeAnalysis.datasets) {
-    renderAll();
+    if (activeGene !== previousGene) {
+      drawChart("crispr");
+      drawChart("rnai");
+    }
+    renderGeneSuggestions();
+    renderResults();
+  }
+});
+
+searchInput.addEventListener("focus", renderGeneSuggestions);
+
+searchInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    hideGeneSuggestions();
+    return;
+  }
+  if (event.key !== "Enter" || activeGene) {
+    return;
+  }
+  const bestMatch = findGeneMatches(geneQuery, 1)[0];
+  if (!bestMatch) {
+    return;
+  }
+  event.preventDefault();
+  selectExactGene(bestMatch.gene);
+  drawChart("crispr");
+  drawChart("rnai");
+  renderResults();
+});
+
+geneSuggestions.addEventListener("click", (event) => {
+  const button = event.target.closest(".gene-suggestion");
+  if (!button) {
+    return;
+  }
+  selectExactGene(button.dataset.gene || "");
+  drawChart("crispr");
+  drawChart("rnai");
+  renderResults();
+});
+
+document.addEventListener("click", (event) => {
+  if (!geneSearchControl.contains(event.target)) {
+    hideGeneSuggestions();
   }
 });
 
