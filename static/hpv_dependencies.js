@@ -18,6 +18,9 @@ const charts = {
 };
 
 const analysisSelect = document.getElementById("analysis-select");
+const analysisSearchInput = document.getElementById("analysis-search");
+const analysisControl = document.querySelector(".analysis-control");
+const analysisSuggestions = document.getElementById("analysis-suggestions");
 const searchInput = document.getElementById("gene-search");
 const geneSearchControl = document.querySelector(".gene-search-control");
 const geneSuggestions = document.getElementById("gene-suggestions");
@@ -174,6 +177,102 @@ function findGeneMatches(value, limit = 50, candidates = searchableGenes) {
     .filter((match) => match.score !== null)
     .sort((left, right) => left.score - right.score || left.gene.length - right.gene.length || left.gene.localeCompare(right.gene))
     .slice(0, limit);
+}
+
+function searchTokens(value) {
+  return String(value || "").toUpperCase().match(/[A-Z0-9]+/g) || [];
+}
+
+function tokenMatchScore(candidate, query) {
+  if (candidate === query) {
+    return 0;
+  }
+  if (candidate.startsWith(query)) {
+    return 2 + (candidate.length - query.length) / 100;
+  }
+  if (query.length >= 2 && candidate.includes(query)) {
+    return 4 + candidate.indexOf(query) / 100;
+  }
+  if (query.length < 3) {
+    return null;
+  }
+  const maxDistance = query.length <= 5 ? 1 : query.length <= 9 ? 2 : 3;
+  if (Math.abs(candidate.length - query.length) > maxDistance) {
+    return null;
+  }
+  const distance = editDistance(candidate, query);
+  return distance <= maxDistance && distance / query.length <= 0.34 ? 8 + distance : null;
+}
+
+function analysisMatchScore(analysis, value) {
+  const query = normalizeGeneTerm(value);
+  const label = normalizeGeneTerm(analysis.label);
+  if (!query) {
+    return null;
+  }
+  if (label === query) {
+    return 0;
+  }
+  if (label.startsWith(query)) {
+    return 1;
+  }
+  if (label.includes(query)) {
+    return 2 + label.indexOf(query) / 100;
+  }
+
+  const queryTokens = searchTokens(value);
+  const candidateTokens = searchTokens([
+    analysis.label,
+    analysis.positive_label,
+    analysis.negative_label,
+    analysis.category,
+    analysis.id,
+  ].join(" "));
+  let score = 5;
+  for (const queryToken of queryTokens) {
+    const tokenScores = candidateTokens
+      .map((candidate) => tokenMatchScore(candidate, queryToken))
+      .filter((candidateScore) => candidateScore !== null);
+    if (!tokenScores.length) {
+      return null;
+    }
+    score += Math.min(...tokenScores);
+  }
+  return score;
+}
+
+function findAnalysisMatches(value, limit = 8) {
+  if (!summary) {
+    return [];
+  }
+  return summary.analyses
+    .map((analysis) => ({ analysis, score: analysisMatchScore(analysis, value) }))
+    .filter((match) => match.score !== null)
+    .sort((left, right) => left.score - right.score || left.analysis.label.localeCompare(right.analysis.label))
+    .slice(0, limit);
+}
+
+function hideAnalysisSuggestions() {
+  analysisSuggestions.classList.add("hidden");
+  analysisSearchInput.setAttribute("aria-expanded", "false");
+}
+
+function renderAnalysisSuggestions() {
+  if (!analysisSearchInput.value.trim()) {
+    hideAnalysisSuggestions();
+    return;
+  }
+  const matches = findAnalysisMatches(analysisSearchInput.value);
+  analysisSuggestions.innerHTML = matches.length
+    ? matches.map(({ analysis }) => `
+        <button class="analysis-suggestion" type="button" role="option" data-analysis="${escapeHtml(analysis.id)}">
+          <strong>${escapeHtml(analysis.label)}</strong>
+          <span>${escapeHtml(analysis.category || "Additional analyses")}</span>
+        </button>
+      `).join("")
+    : '<div class="analysis-suggestion-empty">No close analysis matches. Try fewer words.</div>';
+  analysisSuggestions.classList.remove("hidden");
+  analysisSearchInput.setAttribute("aria-expanded", "true");
 }
 
 function hideGeneSuggestions() {
@@ -685,7 +784,39 @@ fetch("/api/dependency-summary")
   });
 
 analysisSelect.addEventListener("change", async (event) => {
+  analysisSearchInput.value = "";
+  hideAnalysisSuggestions();
   await setAnalysis(event.target.value);
+});
+
+analysisSearchInput.addEventListener("input", renderAnalysisSuggestions);
+analysisSearchInput.addEventListener("focus", renderAnalysisSuggestions);
+analysisSearchInput.addEventListener("keydown", async (event) => {
+  if (event.key === "Escape") {
+    hideAnalysisSuggestions();
+    return;
+  }
+  if (event.key !== "Enter") {
+    return;
+  }
+  const bestMatch = findAnalysisMatches(analysisSearchInput.value, 1)[0];
+  if (!bestMatch) {
+    return;
+  }
+  event.preventDefault();
+  analysisSearchInput.value = "";
+  hideAnalysisSuggestions();
+  await setAnalysis(bestMatch.analysis.id);
+});
+
+analysisSuggestions.addEventListener("click", async (event) => {
+  const button = event.target.closest(".analysis-suggestion");
+  if (!button) {
+    return;
+  }
+  analysisSearchInput.value = "";
+  hideAnalysisSuggestions();
+  await setAnalysis(button.dataset.analysis || "");
 });
 
 searchInput.addEventListener("input", (event) => {
@@ -734,6 +865,9 @@ geneSuggestions.addEventListener("click", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+  if (!analysisControl.contains(event.target)) {
+    hideAnalysisSuggestions();
+  }
   if (!geneSearchControl.contains(event.target)) {
     hideGeneSuggestions();
   }

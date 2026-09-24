@@ -14,9 +14,24 @@
 </section>
 
 <section class="panel explorer-controls">
-  <label for="analysis-select">Analysis
-    <select id="analysis-select"></select>
-  </label>
+  <div class="analysis-control">
+    <label for="analysis-search">Analysis</label>
+    <div class="analysis-search-field">
+      <input
+        id="analysis-search"
+        type="search"
+        placeholder="Find an analysis..."
+        autocomplete="off"
+        aria-autocomplete="list"
+        aria-controls="analysis-suggestions"
+        aria-expanded="false"
+        aria-describedby="analysis-search-help"
+      />
+      <div id="analysis-suggestions" class="analysis-suggestions hidden" role="listbox"></div>
+    </div>
+    <select id="analysis-select" aria-label="Browse all analyses"></select>
+    <span id="analysis-search-help" class="small-line">Search by cohort, gene, alteration, or category, or browse the grouped list.</span>
+  </div>
   <div class="gene-search-control">
     <label for="gene-search">Gene search</label>
     <div class="gene-search-field">

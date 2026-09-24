@@ -388,20 +388,24 @@ input[type='range'] {
 }
 
 .explorer-controls > label,
+.analysis-control,
 .gene-search-control {
   align-self: start;
 }
 
+.analysis-control,
 .gene-search-control {
   display: grid;
   min-width: 0;
   gap: 6px;
 }
 
+.analysis-search-field,
 .gene-search-field {
   position: relative;
 }
 
+.analysis-suggestions,
 .gene-suggestions {
   position: absolute;
   top: calc(100% + 4px);
@@ -416,6 +420,7 @@ input[type='range'] {
   box-shadow: 0 12px 24px rgba(17, 17, 17, 0.16);
 }
 
+.analysis-suggestion,
 .gene-suggestion {
   display: flex;
   width: 100%;
@@ -433,22 +438,36 @@ input[type='range'] {
   text-align: left;
 }
 
+.analysis-suggestion:last-child,
 .gene-suggestion:last-child {
   border-bottom: 0;
 }
 
+.analysis-suggestion:hover,
+.analysis-suggestion:focus-visible,
 .gene-suggestion:hover,
 .gene-suggestion:focus-visible {
   background: #fff6bf;
   outline: none;
 }
 
+.analysis-suggestion {
+  display: grid;
+  justify-content: stretch;
+}
+
+.analysis-suggestion strong {
+  font-size: 14px;
+}
+
+.analysis-suggestion span,
 .gene-suggestion span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 500;
 }
 
+.analysis-suggestion-empty,
 .gene-suggestion-empty {
   padding: 10px 11px;
   color: var(--muted);
