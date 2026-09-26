@@ -6,6 +6,7 @@ data/*.csv
 data/stratifier_sources/
 data/.runtime-data.lock
 data/.runtime-data.json
+data/.stratifier-jobs.lock
 node_modules
 Secretome
 outputs/

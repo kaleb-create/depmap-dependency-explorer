@@ -777,7 +777,7 @@ fetch("/api/dependency-summary")
     summary = normalizeSummary(data);
     populateAnalyses();
     updateCutoffControl();
-    return setAnalysis(summary.analyses[0].id);
+    return setAnalysis(new URLSearchParams(window.location.search).get("analysis") || summary.analyses[0].id);
   })
   .catch(() => {
     metaPanel.innerHTML = '<div><strong>Data summary not found</strong><span class="small-line">Run scripts/build_hpv_dependency_data.py.</span></div>';

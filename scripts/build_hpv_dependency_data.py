@@ -1390,6 +1390,20 @@ def main() -> None:
         if int(d["minimum_positive_values"]) != MIN_GROUP_VALUES
     }
 
+    # Preserve classified negatives so custom combinations never infer status from absence.
+    catalog = []
+    for definition in analysis_defs:
+        positives = definition["positive_model_ids"]
+        negatives = definition.get("eligible_model_ids", all_models) - positives
+        if "negative_models" in definition:
+            negatives = {model["model_id"] for model in definition["negative_models"]}
+        catalog.append({
+            key: definition[key]
+            for key in ("id", "label", "positive_label", "negative_label", "source", "category")
+        } | {"positive_ids": sorted(positives), "negative_ids": sorted(negatives)})
+    with open(os.path.join(STATIC_DATA_DIR, "stratifier_catalog.json"), "w") as f:
+        json.dump(catalog, f, separators=(",", ":"))
+
     crispr, crispr_included = row_differentials(
         local_paths["crispr"],
         crispr_groups,

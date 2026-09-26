@@ -3,6 +3,7 @@ import json
 import math
 import os
 import sqlite3
+import uuid
 from datetime import datetime, timezone
 from functools import lru_cache, wraps
 from typing import Any
@@ -22,6 +23,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 
 from dependency_stratifiers import MODEL_PATH, compute_stratifier
 from runtime_data import ensure_depmap_runtime_data, runtime_data_status
+from stratifier_jobs import StratifierJobs
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
@@ -69,7 +71,7 @@ def connect_db() -> Any:
             ) from exc
         return psycopg.connect(DATABASE_URL, row_factory=dict_row)
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -345,7 +347,12 @@ def add_stratifier_prevalence(analysis: dict[str, Any]) -> None:
 
 def build_dependency_summary() -> dict[str, Any]:
     summary = load_builtin_dependency_summary()
-    summary["analyses"].extend(custom_stratifier_analysis(row) for row in fetch_custom_stratifiers())
+    for row in fetch_custom_stratifiers():
+        analysis = custom_stratifier_analysis(row)
+        analysis.pop("datasets", None)
+        analysis.pop("included_models", None)
+        analysis["data_url"] = f"/api/dependency-analysis/{analysis['id']}"
+        summary["analyses"].append(analysis)
     for analysis in summary["analyses"]:
         add_stratifier_prevalence(analysis)
     return summary
@@ -577,6 +584,13 @@ def dependency_summary():
 @app.route("/api/dependency-analysis/<analysis_id>")
 @login_required
 def dependency_analysis(analysis_id: str):
+    if analysis_id.startswith("custom-") and analysis_id[7:].isdigit():
+        row = db_execute(get_db(), "SELECT * FROM dependency_stratifiers WHERE id=?",
+                         (int(analysis_id[7:]),)).fetchone()
+        if not row:
+            abort(404)
+        analysis = custom_stratifier_analysis(row)
+        return {key: analysis[key] for key in ("datasets", "included_models")}
     if not analysis_id.replace("_", "").isalnum():
         abort(404)
     analysis_path = os.path.join(DEPENDENCY_ANALYSIS_DIR, f"{analysis_id}.json")
@@ -601,6 +615,7 @@ def stratifier_readiness():
 @login_required
 @roles_required("forecaster", "admin")
 def manage_stratifiers():
+    stratifier_jobs.start()
     depmap_ready = runtime_data_status()["ready"]
     rows = []
     for row in fetch_custom_stratifiers():
@@ -625,6 +640,7 @@ def manage_stratifiers():
         openai_ready=bool(os.environ.get("OPENAI_API_KEY")),
         openai_model=os.environ.get("OPENAI_MODEL", "gpt-5.5"),
         depmap_ready=depmap_ready,
+        jobs=stratifier_jobs.recent(),
     )
 
 
@@ -632,20 +648,40 @@ def manage_stratifiers():
 @login_required
 @roles_required("forecaster", "admin")
 def create_stratifier():
-    prompt = request.form.get("prompt", "").strip()
-    if not prompt:
-        flash("Describe the cell-line difference you want to stratify.", "error")
+    payload = request.get_json(silent=True) if request.is_json else request.form
+    prompt = str((payload or {}).get("prompt", "")).strip()
+    if not prompt or len(prompt) > 4000:
+        message = "Describe the comparison in 1 to 4,000 characters."
+        if request.is_json:
+            return {"error": message}, 400
+        flash(message, "error")
         return redirect(url_for("manage_stratifiers"))
+    if not os.environ.get("OPENAI_API_KEY"):
+        return {"error": "Dataset search is unavailable: configure OPENAI_API_KEY on the server."}, 503
+    request_key = str((payload or {}).get("request_key") or uuid.uuid4().hex)[:100]
+    job = stratifier_jobs.enqueue(prompt, request_key)
+    if request.is_json:
+        return {"id": job["id"], "status_url": url_for("stratifier_job", job_id=job["id"])}, 202
+    return redirect(url_for("manage_stratifiers", job=job["id"]))
 
-    try:
-        analysis, source, quality = compute_stratifier(prompt)
-    except Exception as exc:
-        flash(f"Could not create stratifier: {exc}", "error")
-        return redirect(url_for("manage_stratifiers"))
 
-    db = get_db()
+@app.route("/api/stratifier-jobs/<job_id>")
+@login_required
+@roles_required("forecaster", "admin")
+def stratifier_job(job_id):
+    job = stratifier_jobs.get(job_id)
+    if not job:
+        abort(404)
+    stratifier_jobs.start()
+    result = {key: job[key] for key in ("id", "prompt", "status", "stage", "error", "updated_at")}
+    if job["result_id"]:
+        result["explorer_url"] = url_for("hpv_dependencies", analysis=f"custom-{job['result_id']}")
+    return result
+
+
+def save_stratifier(db, prompt, analysis, source, quality):
     now = to_iso(now_utc())
-    db_execute(
+    return insert_row(
         db,
         """
         INSERT INTO dependency_stratifiers
@@ -662,9 +698,6 @@ def create_stratifier():
             now,
         ),
     )
-    db.commit()
-    flash(f"Added stratifier: {analysis['label']}", "success")
-    return redirect(url_for("manage_stratifiers"))
 
 
 @app.route("/stratifiers/<int:stratifier_id>/delete", methods=["POST"])
@@ -689,6 +722,8 @@ def ddx3_selectivity():
 
 
 init_db()
+stratifier_jobs = StratifierJobs(connect_db, db_execute, compute_stratifier, save_stratifier,
+                                os.path.dirname(MODEL_PATH))
 
 
 if __name__ == "__main__":

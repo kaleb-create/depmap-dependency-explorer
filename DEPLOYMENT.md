@@ -65,6 +65,25 @@ the configured byte and row limits.
 
 ## Populating DepMap Data
 
+Custom stratifier requests are saved to `stratifier_jobs` in the configured
+database and return immediately. The web process runs one background build
+at a time; a file lock in `DEPMAP_DATA_DIR` coordinates Gunicorn workers on
+the same host. Reloading the Stratifiers page resumes unfinished jobs after a
+restart. Three repeated server interruptions mark a job failed with a retry
+option. This design targets a single Render instance with persistent storage.
+
+The planner can use Model.csv, the bundled `stratifier_catalog.json` (including
+classified negative cohorts and source definitions), or an external CSV/TSV/JSON
+cohort table. Mapping failures are sent back for up to two corrections. Unknown
+or conflicting external calls are excluded, and at least three observations
+and 50% coverage per cohort are required for every plotted gene. A saved result
+includes the actual source and dependency releases; cohort frequencies describe
+the classified cell lines, not patient prevalence.
+
+The page displays build progress and retains failed prompts for retry. Completed
+jobs link directly to their saved analysis. Custom matrices load on demand from
+`/api/dependency-analysis/custom-<id>`.
+
 Runtime provisioning only downloads the three inputs needed for custom
 stratifiers. To refresh every built-in analysis from all upstream sources, run:
 

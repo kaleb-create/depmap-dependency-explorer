@@ -13,10 +13,9 @@
 
 <section class="panel stratifier-builder">
   <div>
-    <h2>New Dataset-Backed Stratifier</h2>
-    <p class="small-line">Describe two cell-line populations. ChatGPT searches for an authoritative cohort dataset, retrieves supported tabular sources, maps them to DepMap models, and records the evidence with the saved analysis.</p>
+    <h2>New Stratifier</h2>
     <div class="api-status {{ 'api-status-ready' if openai_ready else 'api-status-missing' }}">
-      <strong>{{ 'ChatGPT connected' if openai_ready else 'ChatGPT API key required' }}</strong>
+      <strong>{{ 'Dataset search configured' if openai_ready else 'ChatGPT API key required' }}</strong>
       <span>{{ openai_model if openai_ready else 'Set OPENAI_API_KEY on the server to enable dataset search.' }}</span>
     </div>
     <div class="api-status {{ 'api-status-ready' if depmap_ready else 'api-status-missing' }}">
@@ -24,7 +23,7 @@
       <span>{{ 'CRISPR, siRNA, and model metadata are ready for analysis.' if depmap_ready else 'The server must finish provisioning raw DepMap data.' }}</span>
     </div>
   </div>
-  <form method="post" action="{{ url_for('create_stratifier') }}" class="stratifier-form">
+  <form method="post" action="{{ url_for('create_stratifier') }}" class="stratifier-form" id="stratifier-form">
     <label for="prompt">Cell-line difference</label>
     <textarea
       id="prompt"
@@ -32,10 +31,33 @@
       rows="3"
       placeholder="KRAS mutant lung adenocarcinoma vs KRAS wild-type lung adenocarcinoma"
       required
+      maxlength="4000"
     ></textarea>
-    <button class="btn-primary" type="submit" {% if not openai_ready or not depmap_ready %}disabled{% endif %}>Find dataset and build</button>
+    <button class="btn-primary" type="submit" {% if not openai_ready %}disabled{% endif %}>Find dataset and build</button>
+    <p id="build-error" class="build-error" role="alert" hidden></p>
   </form>
 </section>
+
+{% if jobs %}
+<section class="build-jobs" aria-label="Recent builds">
+  {% for job in jobs %}
+  <article class="build-job" data-job-id="{{ job.id }}" data-status="{{ job.status }}">
+    <div>
+      <strong class="job-stage" role="status">{{ job.stage }}</strong>
+      <p class="small-line">{{ job.prompt }}</p>
+      <p class="job-error build-error" {% if not job.error %}hidden{% endif %}>{{ job.error }}</p>
+    </div>
+    {% if job.status == 'complete' %}
+    <a class="btn-primary" href="{{ url_for('hpv_dependencies', analysis='custom-' ~ job.result_id) }}">Open analysis</a>
+    {% elif job.status == 'failed' %}
+    <button type="button" class="btn-primary retry-build" data-prompt="{{ job.prompt }}">Retry</button>
+    {% else %}
+    <progress aria-label="Build in progress"></progress>
+    {% endif %}
+  </article>
+  {% endfor %}
+</section>
+{% endif %}
 
 <section class="stratifier-list">
   {% if stratifiers %}
@@ -46,6 +68,7 @@
             <span class="chip chip-active">{{ stratifier.quality_status }}</span>
             <h2>{{ stratifier.label }}</h2>
             <p class="muted">{{ stratifier.prompt }}</p>
+            <a class="text-link" href="{{ url_for('hpv_dependencies', analysis='custom-' ~ stratifier.id) }}">Open analysis</a>
           </div>
           {% if not auth_enabled or (current_user and current_user['role'] == 'admin') %}
             <form method="post" action="{{ url_for('delete_stratifier', stratifier_id=stratifier.id) }}">
@@ -99,6 +122,9 @@
             </div>
             <p>{{ stratifier.source.dataset.why_selected }}</p>
             <p class="muted">{{ stratifier.source.dataset.mapping_notes }}</p>
+            {% for annotation in stratifier.source.mapping.annotation_sources or [] %}
+            <p class="small-line">{{ annotation.id }}: {{ annotation.source }}</p>
+            {% endfor %}
             {% if stratifier.source.dataset.source_url.startswith('http://') or stratifier.source.dataset.source_url.startswith('https://') %}
               <a class="text-link" href="{{ stratifier.source.dataset.source_url }}" target="_blank" rel="noreferrer">Open source dataset</a>
             {% endif %}
@@ -145,6 +171,14 @@
           </div>
         </details>
         <details class="quality-details">
+          <summary>Negative cohort ({{ stratifier.analysis.negative_models|length }})</summary>
+          <ul class="model-list">
+            {% for model in stratifier.analysis.negative_models %}
+            <li><strong>{{ model.cell_line }}</strong><span>{{ model.model_id }} · {{ model.disease or 'Unknown disease' }}</span></li>
+            {% endfor %}
+          </ul>
+        </details>
+        <details class="quality-details">
           <summary>Positive cohort</summary>
           <ul class="model-list">
             {% for model in stratifier.analysis.positive_models %}
@@ -164,4 +198,5 @@
     </article>
   {% endif %}
 </section>
+<script src="{{ url_for('static', filename='stratifiers.js') }}"></script>
 {% endblock %}
