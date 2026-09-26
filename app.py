@@ -27,7 +27,12 @@ from stratifier_jobs import StratifierJobs
 
 
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DB_PATH = os.environ.get("DB_PATH", os.path.join(BASE_DIR, "app.db"))
+DEFAULT_DB_PATH = os.path.join(BASE_DIR, "app.db")
+if os.path.isdir("/var/data"):
+    DEFAULT_DB_PATH = "/var/data/app.db"
+elif os.environ.get("DEPMAP_DATA_DIR"):
+    DEFAULT_DB_PATH = os.path.join(os.path.dirname(MODEL_PATH), "app.db")
+DB_PATH = os.environ.get("DB_PATH", DEFAULT_DB_PATH)
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 USING_POSTGRES = bool(DATABASE_URL)
 DEPENDENCY_SUMMARY_PATH = os.path.join(BASE_DIR, "static", "data", "hpv_dependency_summary.json")
@@ -109,6 +114,11 @@ def init_db() -> None:
         db_dir = os.path.dirname(DB_PATH)
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
+        legacy_path = os.path.join(BASE_DIR, "app.db")
+        if os.path.abspath(DB_PATH) != legacy_path and not os.path.exists(DB_PATH) and os.path.exists(legacy_path):
+            # Preserve existing local records when moving to the configured data disk.
+            with sqlite3.connect(legacy_path) as source, sqlite3.connect(DB_PATH) as destination:
+                source.backup(destination)
 
     sqlite_schema = (
         """
@@ -608,6 +618,13 @@ def stratifier_readiness():
         "ready": status["ready"],
         "files": status["files"],
         "openai_ready": bool(os.environ.get("OPENAI_API_KEY")),
+        "storage": {
+            "backend": "postgres" if USING_POSTGRES else "sqlite",
+            "render_disk_present": os.path.isdir("/var/data"),
+            "database_on_render_disk": not USING_POSTGRES and os.path.abspath(DB_PATH).startswith("/var/data/"),
+            "explicit_database_path": bool(os.environ.get("DB_PATH")),
+            "explicit_data_directory": bool(os.environ.get("DEPMAP_DATA_DIR")),
+        },
     }
 
 

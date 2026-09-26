@@ -46,6 +46,14 @@ filesystem is ephemeral, so leaving `DB_PATH` at the repository default will
 erase registered accounts on a redeploy or restart. `DEPMAP_DATA_DIR` must
 contain the raw DepMap CSVs used to compute new stratifiers:
 
+When `DB_PATH` is omitted, an existing `/var/data` disk is now preferred
+automatically. Otherwise an explicitly configured `DEPMAP_DATA_DIR` also
+provides the default database directory. An existing repository-local database
+is migrated only when the destination database does not yet exist. Explicit
+`DB_PATH` and `DATABASE_URL` settings always take precedence. Attaching a disk
+still requires Render account access; creating a directory is not a substitute
+for persistent storage.
+
 - `CRISPRGeneEffect.csv`
 - `D2_combined_gene_dep_scores.csv`
 - `Model.csv`
