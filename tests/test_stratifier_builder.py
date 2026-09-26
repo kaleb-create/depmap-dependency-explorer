@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from contextlib import closing
 from unittest.mock import patch
 
 import dependency_stratifiers as ds
@@ -132,7 +133,7 @@ class JobTests(unittest.TestCase):
         self.dbpath = str(Path(self.temp.name) / "jobs.db")
         self.release = threading.Event()
         self.started = threading.Event()
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("CREATE TABLE results (id INTEGER PRIMARY KEY, prompt TEXT)")
 
     def tearDown(self):
@@ -171,7 +172,7 @@ class JobTests(unittest.TestCase):
         self.release.set()
         self.jobs.thread.join(5)
         self.assertEqual(self.jobs.get(job["id"])["status"], "complete")
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM results").fetchone()[0], 1)
 
     def test_failure_keeps_prompt_and_message(self):
@@ -189,7 +190,7 @@ class JobTests(unittest.TestCase):
         self.make_jobs()
         with patch.object(self.jobs, "start"):
             job = self.jobs.enqueue("Pancreas", "resume")
-        with self.connect() as db:
+        with closing(self.connect()) as db, db:
             db.execute("UPDATE stratifier_jobs SET status='running', attempts=1")
         self.release.set()
         self.jobs.start()

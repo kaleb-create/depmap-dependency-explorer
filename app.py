@@ -5,6 +5,7 @@ import os
 import sqlite3
 import uuid
 from datetime import datetime, timezone
+from contextlib import closing
 from functools import lru_cache, wraps
 from typing import Any
 
@@ -115,9 +116,10 @@ def init_db() -> None:
         if db_dir:
             os.makedirs(db_dir, exist_ok=True)
         legacy_path = os.path.join(BASE_DIR, "app.db")
-        if os.path.abspath(DB_PATH) != legacy_path and not os.path.exists(DB_PATH) and os.path.exists(legacy_path):
+        if (not os.environ.get("DB_PATH") and os.path.abspath(DB_PATH) != legacy_path
+                and not os.path.exists(DB_PATH) and os.path.exists(legacy_path)):
             # Preserve existing local records when moving to the configured data disk.
-            with sqlite3.connect(legacy_path) as source, sqlite3.connect(DB_PATH) as destination:
+            with closing(sqlite3.connect(legacy_path)) as source, closing(sqlite3.connect(DB_PATH)) as destination:
                 source.backup(destination)
 
     sqlite_schema = (
@@ -621,6 +623,7 @@ def stratifier_readiness():
         "storage": {
             "backend": "postgres" if USING_POSTGRES else "sqlite",
             "render_disk_present": os.path.isdir("/var/data"),
+            "render_disk_mounted": os.path.ismount("/var/data"),
             "database_on_render_disk": not USING_POSTGRES and os.path.abspath(DB_PATH).startswith("/var/data/"),
             "explicit_database_path": bool(os.environ.get("DB_PATH")),
             "explicit_data_directory": bool(os.environ.get("DEPMAP_DATA_DIR")),
