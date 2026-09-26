@@ -705,6 +705,7 @@ def save_stratifier(db, prompt, analysis, source, quality):
 @roles_required("admin")
 def delete_stratifier(stratifier_id: int):
     db = get_db()
+    db_execute(db, "DELETE FROM stratifier_jobs WHERE result_id=?", (stratifier_id,))
     db_execute(db, "DELETE FROM dependency_stratifiers WHERE id=?", (stratifier_id,))
     db.commit()
     flash("Stratifier deleted.", "success")

@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import dependency_stratifiers as ds
+from scripts.build_hpv_dependency_data import build_cohort_catalog
 from stratifier_jobs import StratifierJobs
 
 
@@ -34,12 +35,34 @@ class CohortTests(unittest.TestCase):
         self.models += [model(6, "Skin", "Non-Cancerous"), model(7, "", "")]
 
     def test_metadata_complement_excludes_non_cancer_and_unknown(self):
-        positive, negative, *_ = ds.resolve_cohorts(self.models, plan(), {})
+        spec = plan()
+        positive, negative, *_ = ds.resolve_cohorts(self.models, spec, {})
         self.assertEqual(positive, {"M0", "M1", "M2"})
         self.assertEqual(negative, {"M3", "M4", "M5"})
+        self.assertEqual(spec["dataset"]["name"], "DepMap Model.csv")
+
+    def test_catalog_export_requires_source_records_for_negatives(self):
+        definition = dict(id="kras", category="Top driver mutations by prevalence",
+                          label="KRAS", positive_label="Mutant", negative_label="Non-mutant",
+                          source="DepMap driver mutations", positive_model_ids={"M0"})
+        copies = {gene: {"M0", "M1", "M2"} for gene in ("PTEN", "RB1", "SMAD4", "NF1", "KEAP1", "MDM2", "BRCA1", "BRCA2")}
+        catalog = build_cohort_catalog([definition], {"M0", "M1", "M2"}, {"M0", "M1"}, set(), copies)
+        self.assertEqual(catalog[0]["negative_ids"], ["M1"])
+        self.assertTrue(catalog[0]["limitations"])
 
     def test_metadata_fields_are_intersection(self):
         self.assertFalse(ds.model_matches(self.models[0], group(lineages=["Pancreas"], diseases=["Lung Adenocarcinoma"])))
+
+    def test_categorical_metadata_is_exact_and_missing_is_excluded(self):
+        for i, row in enumerate(self.models[:6]):
+            row["Sex"] = "Female" if i < 3 else "Male"
+        spec = plan(positive=group(attributes=[{"field": "Sex", "values": ["Female"]}]),
+                    negative=group(attributes=[{"field": "Sex", "values": ["Male"]}]), negative_mode="explicit")
+        positive, negative, *_ = ds.resolve_cohorts(self.models + [model(9)], spec, {})
+        self.assertEqual(positive, {"M0", "M1", "M2"})
+        self.assertEqual(negative, {"M3", "M4", "M5"})
+        with self.assertRaisesRegex(ValueError, "attribute"):
+            ds.metadata_scope(self.models, group(attributes=[{"field": "Sex", "values": ["guessed"]}]))
 
     def test_unknown_or_empty_definition_does_not_broaden(self):
         for positive in (group(lineages=["Typo disease"]), group()):
@@ -78,10 +101,15 @@ class CohortTests(unittest.TestCase):
             self.assertEqual(positive, {"M0"})
             self.assertEqual(negative, {"M1"})
             self.assertEqual(mapping["conflicting_models_excluded"], 1)
-            _, negative, _ = ds.map_external_dataset(self.models,
+            positive, negative, _ = ds.map_external_dataset(self.models,
                 {"group_column": "Status", "positive_values": ["yes"], "negative_values": []},
                 {"cached_path": str(path), "format": "csv"})
             self.assertEqual(negative, {"M1"})
+            self.assertEqual(positive, {"M0"})
+
+    def test_numeric_json_zero_is_a_valid_class(self):
+        self.assertEqual(ds.normalized(0), "0")
+        self.assertEqual(ds.normalized(None), "")
 
     def test_ambiguous_alias_not_assigned_arbitrarily(self):
         self.models[1]["CellLineName"] = self.models[0]["CellLineName"]

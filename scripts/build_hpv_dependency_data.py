@@ -265,6 +265,7 @@ def is_driver_mutation(row: dict[str, str]) -> bool:
 
 def mutation_groups(
     mutation_path: str,
+    measured: set[str] | None = None,
 ) -> tuple[dict[str, set[str]], list[str], dict[str, set[str]], dict[str, set[str]]]:
     by_gene: dict[str, set[str]] = {}
     likely_biallelic_lof: dict[str, set[str]] = {}
@@ -273,6 +274,8 @@ def mutation_groups(
             gene = row.get("HugoSymbol")
             if not gene or row.get("IsDefaultEntryForModel") != "Yes":
                 continue
+            if measured is not None:
+                measured.add(row["ModelID"])
             if is_driver_mutation(row):
                 by_gene.setdefault(gene, set()).add(row["ModelID"])
             try:
@@ -516,7 +519,7 @@ def expression_state_groups(
     return groups, eligible, extras, thresholds
 
 
-def fusion_groups(fusion_path: str) -> dict[str, set[str]]:
+def fusion_groups(fusion_path: str, measured: set[str] | None = None) -> dict[str, set[str]]:
     groups = {
         "bcr_abl": set(),
         "runx1_eto_fusion": set(),
@@ -534,6 +537,8 @@ def fusion_groups(fusion_path: str) -> dict[str, set[str]]:
             if row.get("IsDefaultEntryForModel") != "Yes":
                 continue
             model_id = row["ModelID"]
+            if measured is not None:
+                measured.add(model_id)
             genes = {
                 parse_gene(row.get("Gene1", ""))[0].upper(),
                 parse_gene(row.get("Gene2", ""))[0].upper(),
@@ -887,7 +892,55 @@ def analysis_models(model_info: dict[str, dict[str, str]], model_ids: set[str], 
     return rows
 
 
-def main() -> None:
+def build_cohort_catalog(definitions, all_models, mutation_measured, fusion_measured, copy_measured):
+    # A missing alteration is not a negative call unless the model has source data.
+    loss_genes = {f"{gene.lower()}_loss": gene for gene in ("PTEN", "RB1", "SMAD4", "NF1", "KEAP1")}
+    scopes = {key: mutation_measured & copy_measured[gene] for key, gene in loss_genes.items()}
+    scopes.update({
+        "tp53_rb1_dual_loss": mutation_measured & copy_measured["RB1"],
+        "kras_stk11": mutation_measured,
+        "kras_keap1": mutation_measured & copy_measured["KEAP1"],
+        "kras_tp53": mutation_measured,
+        "mdm2_amp_tp53_wt": mutation_measured & copy_measured["MDM2"],
+        "brca_biallelic_proxy": mutation_measured & copy_measured["BRCA1"] & copy_measured["BRCA2"],
+        "nrf2_pathway": mutation_measured & copy_measured["KEAP1"],
+        "wnt_pathway": mutation_measured,
+    })
+    catalog = []
+    for definition in definitions:
+        key, category = definition["id"], definition["category"]
+        positives = set(definition["positive_model_ids"])
+        eligible = set(definition.get("eligible_model_ids", all_models))
+        limitations = []
+        if category in {"Top driver mutations by prevalence", "Additional mutation groups"}:
+            eligible &= mutation_measured
+        elif category == "Oncogenic fusions":
+            eligible &= fusion_measured
+            if key == "alk":
+                eligible &= mutation_measured
+            limitations.append("Negatives have default fusion records but no qualifying fusion call; this is not proof of biological absence.")
+        if key in scopes:
+            eligible &= scopes[key]
+        if key in {"mdm2_amp_tp53_wt", "brca_biallelic_proxy"}:
+            positives &= eligible
+        negatives = eligible - positives
+        if "negative_models" in definition:
+            negatives = {model["model_id"] for model in definition["negative_models"]} & eligible
+        if category in {"Top driver mutations by prevalence", "Additional mutation groups"} or key in scopes or key == "alk":
+            limitations.append("Mutation-negative means no qualifying driver annotation among models with default mutation records, not sequence-confirmed wild-type at every locus. Mutation-free models absent from that table are conservatively excluded.")
+        if key == "hpv":
+            limitations.append("The comparator has no recorded HPV transformant annotation in Cellosaurus; these are not individually confirmed HPV-negative models.")
+        item = {field: definition[field] for field in ("id", "label", "positive_label", "negative_label", "source", "category")}
+        if key == "hpv":
+            item.update(label="HPV-annotated vs no recorded HPV transformant", negative_label="No recorded HPV transformant")
+        item.update(positive_ids=sorted(positives), negative_ids=sorted(negatives), limitations=limitations)
+        if "DepMap" in item["source"] and "26Q1" not in item["source"] and ("mutation" in item["source"].lower() or "Fusion" in item["source"]):
+            item["source"] += f"; mutation/fusion annotations: {CRISPR_RELEASE}"
+        catalog.append(item)
+    return catalog
+
+
+def main(catalog_only=False) -> None:
     ensure_dirs()
     index = read_index()
     files = {
@@ -924,10 +977,11 @@ def main() -> None:
     }
     hbv_hcc_groups, hbv_hcc_extras = load_hbv_hcc_annotations(model_info)
 
+    mutation_measured, fusion_measured = set(), set()
     mutation_sets, top_driver_genes, mutations_by_gene, likely_biallelic_lof = mutation_groups(
-        local_paths["mutations"]
+        local_paths["mutations"], mutation_measured
     )
-    fusion_sets = fusion_groups(local_paths["fusions"])
+    fusion_sets = fusion_groups(local_paths["fusions"], fusion_measured)
     copy_sets, copy_measured, copy_values = copy_number_groups(local_paths["copy_number_22q1"])
     signature_sets, signature_eligible, signature_extras, signature_thresholds = global_signature_groups(
         local_paths["global_signatures_24q2"]
@@ -1390,19 +1444,12 @@ def main() -> None:
         if int(d["minimum_positive_values"]) != MIN_GROUP_VALUES
     }
 
-    # Preserve classified negatives so custom combinations never infer status from absence.
-    catalog = []
-    for definition in analysis_defs:
-        positives = definition["positive_model_ids"]
-        negatives = definition.get("eligible_model_ids", all_models) - positives
-        if "negative_models" in definition:
-            negatives = {model["model_id"] for model in definition["negative_models"]}
-        catalog.append({
-            key: definition[key]
-            for key in ("id", "label", "positive_label", "negative_label", "source", "category")
-        } | {"positive_ids": sorted(positives), "negative_ids": sorted(negatives)})
+    catalog = build_cohort_catalog(analysis_defs, all_models, mutation_measured, fusion_measured, copy_measured)
     with open(os.path.join(STATIC_DATA_DIR, "stratifier_catalog.json"), "w") as f:
         json.dump(catalog, f, separators=(",", ":"))
+    if catalog_only:
+        print(f"Wrote {len(catalog)} cohort definitions with measured comparator eligibility")
+        return
 
     crispr, crispr_included = row_differentials(
         local_paths["crispr"],
@@ -1506,4 +1553,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--catalog-only", action="store_true")
+    main(catalog_only=parser.parse_args().catalog_only)

@@ -35,6 +35,12 @@ MAX_DATASET_ROWS = int(os.environ.get("MAX_STRATIFIER_DATASET_ROWS", 250_000))
 MIN_GROUP_VALUES = 3
 MIN_GROUP_COVERAGE = 0.5
 CATALOG_PATH = os.path.join(BASE_DIR, "static", "data", "stratifier_catalog.json")
+METADATA_ATTRIBUTES = (
+    "Sex", "AgeCategory", "PrimaryOrMetastasis", "SampleCollectionSite", "SourceType",
+    "ModelType", "TissueOrigin", "ModelDerivationMaterial", "ModelTreatment",
+    "PatientTreatmentStatus", "PatientTreatmentType", "PatientTumorGrade",
+    "GrowthPattern", "EngineeredModel", "PediatricModelType",
+)
 
 IDENTIFIER_COLUMNS = (
     "ModelID",
@@ -52,7 +58,7 @@ IDENTIFIER_COLUMNS = (
 
 
 def normalized(value: object) -> str:
-    return "".join(character for character in str(value or "").casefold() if character.isalnum())
+    return "".join(character for character in str("" if value is None else value).casefold() if character.isalnum())
 
 
 def validate_public_url(url: str) -> None:
@@ -88,6 +94,9 @@ def load_model_rows() -> list[dict[str, str]]:
 
 
 def model_matches(model: dict[str, str], spec: dict[str, Any]) -> bool:
+    for condition in spec.get("attributes", []):
+        if normalized(model.get(condition["field"])) not in {normalized(value) for value in condition["values"]}:
+            return False
     field_checks = [
         ("OncotreeLineage", spec.get("lineages") or []),
         ("OncotreePrimaryDisease", spec.get("diseases") or []),
@@ -302,7 +311,7 @@ def choose_models(model_rows: list[dict[str, str]], spec: dict[str, Any]) -> set
     return {row["ModelID"] for row in model_rows if model_matches(row, spec)}
 
 
-def available_taxonomy(model_rows: list[dict[str, str]]) -> dict[str, list[str]]:
+def available_taxonomy(model_rows: list[dict[str, str]]) -> dict[str, Any]:
     taxonomy: dict[str, list[str]] = {}
     for key, column in {
         "lineages": "OncotreeLineage",
@@ -311,6 +320,8 @@ def available_taxonomy(model_rows: list[dict[str, str]]) -> dict[str, list[str]]
     }.items():
         values = sorted({row[column] for row in model_rows if row.get(column)})
         taxonomy[key] = values[:500]
+    taxonomy["attributes"] = {field: sorted({row[field] for row in model_rows if row.get(field)})
+                              for field in METADATA_ATTRIBUTES}
     return taxonomy
 
 
@@ -463,7 +474,6 @@ def map_external_dataset(
     negative_ids: set[str] = set()
     mapped_rows = 0
     unmatched_identifiers: set[str] = set()
-    classified_ids: set[str] = set()
     for row in rows:
         raw_identifier = row.get(identifier_column)
         model_id = lookup.get(normalized(raw_identifier))
@@ -473,15 +483,12 @@ def map_external_dataset(
             continue
         mapped_rows += 1
         group_value = normalized(row.get(group_column))
-        if group_value and group_value not in {"na", "nan", "unknown", "notavailable", "notassessed"}:
-            classified_ids.add(model_id)
+        classified = bool(group_value) and group_value not in {"na", "nan", "unknown", "notavailable", "notassessed"}
         if group_value in positive_values:
             positive_ids.add(model_id)
-        if group_value in negative_values:
+        if group_value in negative_values or (not negative_values and classified and group_value not in positive_values):
             negative_ids.add(model_id)
 
-    if not negative_values:
-        negative_ids = classified_ids - positive_ids
     conflicts = positive_ids & negative_ids
     positive_ids -= conflicts
     negative_ids -= conflicts
@@ -583,8 +590,14 @@ def request_openai_spec(prompt: str, taxonomy: dict[str, list[str]], catalog=Non
             "group": {
                 "type": "object",
                 "additionalProperties": False,
-                "required": ["lineages", "diseases", "subtypes", "include_terms", "exclude_terms", "annotations", "annotation_logic"],
+                "required": ["lineages", "diseases", "subtypes", "include_terms", "exclude_terms", "annotations", "annotation_logic", "attributes"],
                 "properties": {
+                    "attributes": {"type": "array", "items": {
+                        "type": "object", "additionalProperties": False,
+                        "required": ["field", "values"],
+                        "properties": {"field": {"type": "string"},
+                                       "values": {"type": "array", "items": {"type": "string"}}}
+                    }},
                     "annotation_logic": {"type": "string", "enum": ["all", "any"]},
                     "annotations": {"type": "array", "items": {
                         "type": "object", "additionalProperties": False,
@@ -617,6 +630,12 @@ def request_openai_spec(prompt: str, taxonomy: dict[str, list[str]], catalog=Non
                     "means union. Do not substitute one alteration for a different one. Non-cancerous and "
                     "unclassified models are always excluded. Within a group, different taxonomy fields are ANDed; "
                     "multiple values of one field are ORed. All filters can be empty for an unrestricted cohort. "
+                    "Use attributes for exact categorical Model.csv fields such as Sex, GrowthPattern or "
+                    "PrimaryOrMetastasis. The supplied taxonomy lists each field and its observed values. "
+                    "Use explicit positive and negative values when missing/unknown values must be excluded. "
+                    "Do not encode attributes or molecular states as include_terms; include_terms only searches "
+                    "cell-line name and tissue/disease/subtype text. If a specific external table import is requested, "
+                    "use source_kind external with its direct download URL and exact columns. "
                     "negative_mode complement means the classified complement of positive annotations within "
                     "the negative group's metadata scope. Use explicit with negative annotations for specific "
                     "comparators such as KRAS-only versus KRAS+STK11. Unknown molecular status is never negative. "
@@ -731,6 +750,10 @@ def cancer_model_ids(model_rows):
 
 def metadata_scope(model_rows, group):
     taxonomy = available_taxonomy(model_rows)
+    for condition in group.get("attributes", []):
+        allowed = {normalized(value) for value in taxonomy["attributes"].get(condition["field"], [])}
+        if not condition.get("values") or any(normalized(value) not in allowed for value in condition["values"]):
+            raise ValueError(f"Unknown metadata attribute or value: {condition}. Use the supplied attribute taxonomy.")
     for field in ("lineages", "diseases", "subtypes"):
         allowed = {normalized(value) for value in taxonomy[field]}
         invalid = [value for value in group.get(field, []) if normalized(value) not in allowed]
@@ -767,12 +790,18 @@ def resolve_cohorts(model_rows, spec, catalog):
             raise ValueError("An external comparison requires a downloadable cohort table.")
         retrieval = retrieve_dataset(dataset)
         positive_ids, negative_ids, mapping = map_external_dataset(model_rows, dataset, retrieval)
+        universe = cancer_model_ids(model_rows)
+        positive_scope &= annotation_scope(spec["positive"], catalog, universe)[0]
+        negative_scope &= annotation_scope(spec["negative"], catalog, universe)[0]
         positive_ids &= positive_scope
         negative_ids &= negative_scope
         method = "external_dataset"
     else:
+        dataset.update(format="metadata_only", download_url="", provider="Broad Institute DepMap",
+                       name="DepMap Model.csv" if kind == "metadata" else "DepMap annotated cohort catalog",
+                       source_url="https://depmap.org/portal/")
         if kind == "metadata" and not any(spec["positive"].get(key)
-                for key in ("lineages", "diseases", "subtypes", "include_terms")):
+                for key in ("lineages", "diseases", "subtypes", "include_terms", "attributes")):
             raise ValueError("A metadata comparison needs a defined positive tissue, disease, or subtype.")
         if kind == "catalog" and not spec["positive"].get("annotations"):
             raise ValueError("A molecular comparison needs an exact cohort annotation.")
@@ -799,11 +828,14 @@ def resolve_cohorts(model_rows, spec, catalog):
     if len(positive_ids) < MIN_GROUP_VALUES or len(negative_ids) < MIN_GROUP_VALUES:
         observed = mapping.get("observed_group_values", [])
         raise ValueError(f"Only {len(positive_ids)} positive and {len(negative_ids)} negative models mapped; "
-                         f"at least {MIN_GROUP_VALUES} per side are required. Observed dataset categories: {observed}.")
+                         f"at least {MIN_GROUP_VALUES} per side are required. Source kind: {kind}. "
+                         f"Observed dataset categories: {observed}. For non-tissue metadata use exact attributes; "
+                         "for imported tables use source_kind external, not metadata include_terms.")
     if kind == "catalog":
         used = {condition["analysis_id"] for group in (spec["positive"], spec["negative"])
                 for condition in group.get("annotations", [])}
-        mapping["annotation_sources"] = [{"id": key, "source": catalog[key]["source"]} for key in sorted(used)]
+        mapping["annotation_sources"] = [{"id": key, "source": catalog[key]["source"],
+            "limitations": catalog[key].get("limitations", [])} for key in sorted(used)]
     return positive_ids, negative_ids, retrieval, mapping, method
 
 
@@ -815,10 +847,12 @@ def compute_stratifier(prompt: str, progress=None) -> tuple[dict[str, Any], dict
     rnai_release = runtime_status["files"]["D2_combined_gene_dep_scores.csv"]["release"]
     model_rows = load_model_rows()
     catalog = load_cohort_catalog()
+    taxonomy = available_taxonomy(model_rows)
+    taxonomy["model_metadata_release"] = runtime_status["files"]["Model.csv"]["release"]
     feedback = []
     for attempt in range(3):
         report("Selecting dataset and cohort rules" if not attempt else f"Refining dataset mapping (attempt {attempt + 1}/3)")
-        spec = request_openai_spec(prompt, available_taxonomy(model_rows), catalog, feedback)
+        spec = request_openai_spec(prompt, taxonomy, catalog, feedback)
         report("Retrieving source and validating cohorts")
         try:
             positive_ids, negative_ids, retrieval, mapping, cohort_method = resolve_cohorts(model_rows, spec, catalog)
@@ -876,6 +910,7 @@ def compute_stratifier(prompt: str, progress=None) -> tuple[dict[str, Any], dict
         "mapping": mapping,
         "cohort_method": cohort_method,
         "dependency_releases": {
+            "model_metadata": runtime_status["files"]["Model.csv"]["release"],
             "crispr": crispr_release,
             "rnai": rnai_release,
         },
@@ -887,6 +922,8 @@ def compute_stratifier(prompt: str, progress=None) -> tuple[dict[str, Any], dict
         "negative_model_ids": sorted(negative_ids),
     }
     quality = spec["quality"]
+    for annotation in mapping.get("annotation_sources", []):
+        quality.setdefault("weaknesses", []).extend(annotation.get("limitations", []))
     quality.setdefault("weaknesses", []).append(
         "Cell-line cohort frequencies are not patient cancer prevalence; lineage and release differences can confound selectivity."
     )

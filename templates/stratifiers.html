@@ -100,8 +100,16 @@
             <div class="dataset-provenance">
               <div>
                 <span class="data-label">Selected source</span>
+                {% if stratifier.source.cohort_method == 'depmap_metadata' %}
+                <strong>DepMap Model.csv</strong>
+                <span>Broad Institute DepMap</span>
+                {% elif stratifier.source.cohort_method == 'depmap_catalog' %}
+                <strong>DepMap annotated cohort catalog</strong>
+                <span>Broad Institute DepMap and source annotations</span>
+                {% else %}
                 <strong>{{ stratifier.source.dataset.name }}</strong>
                 <span>{{ stratifier.source.dataset.provider }}</span>
+                {% endif %}
               </div>
               <div>
                 <span class="data-label">Retrieval</span>
@@ -120,6 +128,9 @@
                 <span>{{ stratifier.source.mapping.identifier_column }} to ModelID</span>
               </div>
             </div>
+            {% for assay, release in (stratifier.source.dependency_releases or {}).items() %}
+            <p class="small-line">{{ assay|replace('_', ' ')|upper }}: {{ release }}</p>
+            {% endfor %}
             <p>{{ stratifier.source.dataset.why_selected }}</p>
             <p class="muted">{{ stratifier.source.dataset.mapping_notes }}</p>
             {% for annotation in stratifier.source.mapping.annotation_sources or [] %}
@@ -140,7 +151,7 @@
           </details>
         {% endif %}
         <details class="quality-details">
-          <summary>Quality analysis</summary>
+          <summary>Quality analysis (AI-assisted)</summary>
           <p>{{ stratifier.quality.summary }}</p>
           {% if stratifier.quality.dataset_summary %}<p><strong>{{ stratifier.quality.dataset_summary }}</strong></p>{% endif %}
           <div class="quality-grid">
